@@ -1,0 +1,507 @@
+---
+description: "Testing strategy - TDD workflow, JUnit 5, AssertJ, Mockito, Testcontainers"
+globs: ["**/*Test.java", "**/*Tests.java", "**/test/**/*.java"]
+---
+
+# Testing Strategy
+
+## TDD Workflow (Mandatory)
+
+1. **RED** — Write a failing test first
+2. **GREEN** — Write minimal code to pass
+3. **REFACTOR** — Clean up while tests stay green
+
+**No implementation without tests first.**
+
+## Dependencies
+
+```xml
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-test</artifactId>
+    <scope>test</scope>
+</dependency>
+
+<dependency>
+    <groupId>org.testcontainers</groupId>
+    <artifactId>testcontainers</artifactId>
+    <scope>test</scope>
+</dependency>
+
+<dependency>
+    <groupId>org.testcontainers</groupId>
+    <artifactId>postgresql</artifactId>
+    <scope>test</scope>
+</dependency>
+
+<dependency>
+    <groupId>org.testcontainers</groupId>
+    <artifactId>junit-jupiter</artifactId>
+    <scope>test</scope>
+</dependency>
+```
+
+## Test Structure (AAA Pattern)
+
+```java
+@ExtendWith(MockitoExtension.class)
+class CreateUserCommandHandlerTest {
+    
+    @Mock
+    private UserRepository userRepository;
+    
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
+    
+    @InjectMocks
+    private CreateUserCommandHandler handler;
+    
+    @Test
+    void shouldCreateUserWhenEmailIsUnique() {
+        // Arrange
+        var command = new CreateUserCommand("test@example.com", "Test User");
+        
+        when(userRepository.existsByEmail(command.email()))
+            .thenReturn(false);
+        
+        when(userRepository.save(any(User.class)))
+            .thenAnswer(invocation -> {
+                var user = (User) invocation.getArgument(0);
+                user.setId(UUID.randomUUID());
+                return user;
+            });
+        
+        // Act
+        var result = handler.handle(command);
+        
+        // Assert
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result).isInstanceOf(Result.Success.class);
+        
+        verify(userRepository).save(any(User.class));
+        verify(eventPublisher).publishEvent(any(UserCreatedEvent.class));
+    }
+    
+    @Test
+    void shouldReturnFailureWhenEmailExists() {
+        // Arrange
+        var command = new CreateUserCommand("existing@example.com", "Test User");
+        
+        when(userRepository.existsByEmail(command.email()))
+            .thenReturn(true);
+        
+        // Act
+        var result = handler.handle(command);
+        
+        // Assert
+        assertThat(result.isFailure()).isTrue();
+        
+        var failure = (Result.Failure<UUID>) result;
+        assertThat(failure.error()).isEqualTo(UserErrors.EMAIL_ALREADY_EXISTS);
+        
+        verify(userRepository, never()).save(any(User.class));
+    }
+}
+```
+
+## Naming Convention
+
+```
+{methodName}_should{expectedBehavior}_when{condition}
+```
+
+Examples:
+- `handle_shouldReturnSuccess_whenUserIsValid`
+- `handle_shouldThrowValidationException_whenEmailIsInvalid`
+- `findById_shouldReturnEmpty_whenUserDoesNotExist`
+
+## AssertJ Assertions
+
+```java
+import static org.assertj.core.api.Assertions.*;
+
+// Basic assertions
+assertThat(user).isNotNull();
+assertThat(user.getEmail()).isEqualTo("test@example.com");
+assertThat(user.getId()).isNotNull();
+
+// Collection assertions
+assertThat(users)
+    .hasSize(3)
+    .extracting(User::getEmail)
+    .containsExactlyInAnyOrder("a@example.com", "b@example.com", "c@example.com");
+
+// Exception assertions
+assertThatThrownBy(() -> userService.create(null))
+    .isInstanceOf(IllegalArgumentException.class)
+    .hasMessage("Request cannot be null");
+
+// Optional assertions
+assertThat(userRepository.findById(userId))
+    .isPresent()
+    .get()
+    .extracting(User::getEmail)
+    .isEqualTo("test@example.com");
+
+// Object field assertions
+assertThat(user)
+    .extracting(User::getEmail, User::getName)
+    .containsExactly("test@example.com", "Test User");
+```
+
+## Mockito
+
+```java
+// Setup mocks
+@Mock
+private UserRepository userRepository;
+
+@InjectMocks
+private UserService userService;
+
+// Stubbing
+when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+when(userRepository.save(any(User.class))).thenReturn(savedUser);
+
+// Argument matchers
+when(userRepository.findByEmail(eq("test@example.com"))).thenReturn(Optional.of(user));
+when(userRepository.save(argThat(u -> u.getEmail().equals("test@example.com")))).thenReturn(user);
+
+// Verification
+verify(userRepository).save(user);
+verify(userRepository, times(2)).findById(any());
+verify(userRepository, never()).delete(any());
+
+// Argument captor
+ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
+verify(userRepository).save(userCaptor.capture());
+
+User capturedUser = userCaptor.getValue();
+assertThat(capturedUser.getEmail()).isEqualTo("test@example.com");
+
+// Spy (partial mock)
+@Spy
+private UserService userService;
+
+// Void methods
+doNothing().when(eventPublisher).publishEvent(any());
+doThrow(new RuntimeException()).when(userRepository).delete(any());
+```
+
+## Integration Tests with Testcontainers
+
+```java
+@SpringBootTest
+@Testcontainers
+@ActiveProfiles("test")
+class UserRepositoryIntegrationTest {
+    
+    @Container
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")
+        .withDatabaseName("testdb")
+        .withUsername("test")
+        .withPassword("test");
+    
+    @DynamicPropertySource
+    static void configureProperties(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", postgres::getJdbcUrl);
+        registry.add("spring.datasource.username", postgres::getUsername);
+        registry.add("spring.datasource.password", postgres::getPassword);
+    }
+    
+    @Autowired
+    private UserRepository userRepository;
+    
+    @BeforeEach
+    void setUp() {
+        userRepository.deleteAll();
+    }
+    
+    @Test
+    void shouldSaveAndRetrieveUser() {
+        // Arrange
+        var user = new User();
+        user.setEmail("test@example.com");
+        user.setName("Test User");
+        
+        // Act
+        var saved = userRepository.save(user);
+        var found = userRepository.findById(saved.getId());
+        
+        // Assert
+        assertThat(found)
+            .isPresent()
+            .get()
+            .satisfies(u -> {
+                assertThat(u.getEmail()).isEqualTo("test@example.com");
+                assertThat(u.getName()).isEqualTo("Test User");
+            });
+    }
+    
+    @Test
+    void shouldEnforceUniqueEmailConstraint() {
+        // Arrange
+        var user1 = new User();
+        user1.setEmail("test@example.com");
+        user1.setName("User 1");
+        
+        var user2 = new User();
+        user2.setEmail("test@example.com");
+        user2.setName("User 2");
+        
+        // Act
+        userRepository.save(user1);
+        
+        // Assert
+        assertThatThrownBy(() -> userRepository.save(user2))
+            .isInstanceOf(DataIntegrityViolationException.class);
+    }
+}
+```
+
+## Web Layer Tests (MockMvc)
+
+```java
+@WebMvcTest(UserController.class)
+class UserControllerTest {
+    
+    @Autowired
+    private MockMvc mockMvc;
+    
+    @MockBean
+    private UserService userService;
+    
+    @Test
+    void shouldReturnUserWhenFound() throws Exception {
+        // Arrange
+        var userId = UUID.randomUUID();
+        var userDto = new UserDto(userId, "test@example.com", "Test User");
+        
+        when(userService.findById(userId)).thenReturn(Optional.of(userDto));
+        
+        // Act & Assert
+        mockMvc.perform(get("/api/users/{id}", userId))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.id").value(userId.toString()))
+            .andExpect(jsonPath("$.email").value("test@example.com"))
+            .andExpect(jsonPath("$.name").value("Test User"));
+    }
+    
+    @Test
+    void shouldReturn404WhenUserNotFound() throws Exception {
+        // Arrange
+        var userId = UUID.randomUUID();
+        when(userService.findById(userId)).thenReturn(Optional.empty());
+        
+        // Act & Assert
+        mockMvc.perform(get("/api/users/{id}", userId))
+            .andExpect(status().isNotFound());
+    }
+    
+    @Test
+    void shouldValidateRequestBody() throws Exception {
+        // Arrange
+        var invalidRequest = """
+            {
+                "email": "invalid-email",
+                "name": ""
+            }
+            """;
+        
+        // Act & Assert
+        mockMvc.perform(post("/api/users")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(invalidRequest))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.errors").exists());
+    }
+}
+```
+
+## End-to-End Tests
+
+```java
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@Testcontainers
+@ActiveProfiles("test")
+class UserApiE2ETest {
+    
+    @Container
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
+    
+    @DynamicPropertySource
+    static void configureProperties(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", postgres::getJdbcUrl);
+        registry.add("spring.datasource.username", postgres::getUsername);
+        registry.add("spring.datasource.password", postgres::getPassword);
+    }
+    
+    @Autowired
+    private TestRestTemplate restTemplate;
+    
+    @Autowired
+    private UserRepository userRepository;
+    
+    @BeforeEach
+    void setUp() {
+        userRepository.deleteAll();
+    }
+    
+    @Test
+    void shouldCreateAndRetrieveUser() {
+        // Arrange
+        var request = new CreateUserRequest("test@example.com", "Test User");
+        
+        // Act - Create
+        var createResponse = restTemplate.postForEntity(
+            "/api/users",
+            request,
+            UserDto.class
+        );
+        
+        // Assert - Create
+        assertThat(createResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(createResponse.getBody()).isNotNull();
+        
+        var userId = createResponse.getBody().id();
+        
+        // Act - Retrieve
+        var getResponse = restTemplate.getForEntity(
+            "/api/users/" + userId,
+            UserDto.class
+        );
+        
+        // Assert - Retrieve
+        assertThat(getResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(getResponse.getBody())
+            .satisfies(user -> {
+                assertThat(user.id()).isEqualTo(userId);
+                assertThat(user.email()).isEqualTo("test@example.com");
+                assertThat(user.name()).isEqualTo("Test User");
+            });
+    }
+}
+```
+
+## Testing with Security
+
+```java
+@WebMvcTest(UserController.class)
+@Import(SecurityConfig.class)
+class SecuredUserControllerTest {
+    
+    @Autowired
+    private MockMvc mockMvc;
+    
+    @MockBean
+    private UserService userService;
+    
+    @MockBean
+    private JwtAuthenticationFilter jwtAuthFilter;
+    
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void shouldAllowAdminToDeleteUser() throws Exception {
+        // Act & Assert
+        mockMvc.perform(delete("/api/users/{id}", UUID.randomUUID()))
+            .andExpect(status().isNoContent());
+    }
+    
+    @Test
+    @WithMockUser(roles = "USER")
+    void shouldDenyUserFromDeletingUser() throws Exception {
+        // Act & Assert
+        mockMvc.perform(delete("/api/users/{id}", UUID.randomUUID()))
+            .andExpect(status().isForbidden());
+    }
+    
+    @Test
+    void shouldRequireAuthenticationForProtectedEndpoint() throws Exception {
+        // Act & Assert
+        mockMvc.perform(get("/api/users/{id}", UUID.randomUUID()))
+            .andExpect(status().isUnauthorized());
+    }
+}
+```
+
+## Parameterized Tests
+
+```java
+@ParameterizedTest
+@ValueSource(strings = {"", "  ", "invalid-email", "@example.com"})
+void shouldRejectInvalidEmails(String email) {
+    // Arrange
+    var request = new CreateUserRequest(email, "Test User");
+    
+    // Act & Assert
+    assertThatThrownBy(() -> userService.create(request))
+        .isInstanceOf(ValidationException.class);
+}
+
+@ParameterizedTest
+@CsvSource({
+    "test@example.com, Test User, true",
+    "admin@example.com, Admin, true",
+    ", Test User, false",
+    "test@example.com, , false"
+})
+void shouldValidateUserRequest(String email, String name, boolean valid) {
+    // Test with different combinations
+}
+
+@ParameterizedTest
+@MethodSource("userProvider")
+void shouldCreateUsers(CreateUserRequest request) {
+    // Test with complex objects
+}
+
+static Stream<CreateUserRequest> userProvider() {
+    return Stream.of(
+        new CreateUserRequest("test1@example.com", "User 1"),
+        new CreateUserRequest("test2@example.com", "User 2")
+    );
+}
+```
+
+## Test Quality Standards
+
+- Tests MUST be deterministic and isolated
+- Tests MUST NOT depend on execution order
+- Mock external dependencies in unit tests
+- Use Testcontainers for real database in integration tests
+- Aim for meaningful coverage, not arbitrary percentages
+- Each test should test ONE behavior
+- Use descriptive test names
+- Keep tests simple and readable
+
+## Test Configuration
+
+```yaml
+# src/test/resources/application-test.yml
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: true
+  
+  datasource:
+    # Configured via @DynamicPropertySource in tests
+    
+logging:
+  level:
+    org.springframework: WARN
+    com.example: DEBUG
+```
+
+## Conventions
+
+- Unit tests: Test individual components in isolation with mocks
+- Integration tests: Test interactions with database using Testcontainers
+- E2E tests: Test full request/response cycle
+- Use `@WebMvcTest` for controller tests (fast, focused)
+- Use `@SpringBootTest` for integration/E2E tests (slower, comprehensive)
+- ALWAYS clean up test data between tests
+- Use `@Transactional` on test methods for automatic rollback
+- Mock time-dependent code (use `Clock` abstraction)
+
+**See also:** `cqrs.mdc`, `jpa.mdc`, `dependencies.mdc`

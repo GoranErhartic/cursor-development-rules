@@ -1,0 +1,83 @@
+---
+description: "FluentValidation patterns for request validation in ASP.NET Core"
+globs: ["**/*Validator*.cs", "**/Validators/**/*.cs", "**/*Command*.cs", "**/*Query*.cs"]
+---
+
+# FluentValidation Patterns
+
+## Validator Structure
+
+```csharp
+public sealed class CreateUserCommandValidator : AbstractValidator<CreateUserCommand>
+{
+    public CreateUserCommandValidator()
+    {
+        RuleFor(x => x.Email)
+            .NotEmpty().WithMessage("Email is required")
+            .EmailAddress().WithMessage("Invalid email format")
+            .MaximumLength(256);
+
+        RuleFor(x => x.Name)
+            .NotEmpty()
+            .MaximumLength(100)
+            .Matches(@"^[\w\s-]+$").WithMessage("Name contains invalid characters");
+    }
+}
+```
+
+## Conventions
+
+- ONE validator per command/query
+- Name pattern: `{CommandName}Validator`
+- Place in same folder as command/query
+- Use `sealed` class modifier
+- ALWAYS provide custom error messages
+
+## Common Rules
+
+| Scenario | Rule |
+|----------|------|
+| Required | `.NotEmpty()` |
+| Email | `.EmailAddress()` |
+| Max length | `.MaximumLength(n)` |
+| Enum | `.IsInEnum()` |
+| Guid not empty | `.NotEqual(Guid.Empty)` |
+| Conditional | `.When(x => condition)` |
+| Async DB check | `.MustAsync(async (val, ct) => ...)` |
+
+## Pipeline Behavior Integration
+
+```csharp
+public sealed class ValidationBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
+    where TRequest : IRequest<TResponse>
+{
+    private readonly IEnumerable<IValidator<TRequest>> _validators;
+
+    public ValidationBehavior(IEnumerable<IValidator<TRequest>> validators)
+        => _validators = validators;
+
+    public async Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken ct)
+    {
+        if (!_validators.Any()) return await next();
+
+        var context = new ValidationContext<TRequest>(request);
+        var failures = (await Task.WhenAll(_validators.Select(v => v.ValidateAsync(context, ct))))
+            .SelectMany(r => r.Errors)
+            .Where(f => f is not null)
+            .ToList();
+
+        if (failures.Count > 0)
+            throw new ValidationException(failures);
+
+        return await next();
+    }
+}
+```
+
+## Registration
+
+```csharp
+services.AddValidatorsFromAssemblyContaining<CreateUserCommandValidator>();
+```
+
+**See also:** `error-handling.mdc`, `mediator.mdc`

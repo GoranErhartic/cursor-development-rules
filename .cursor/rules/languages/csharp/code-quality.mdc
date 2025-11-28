@@ -1,0 +1,98 @@
+---
+description: "Code quality standards - C# 14 idioms, naming conventions, nullable references, records"
+globs: ["**/*.cs"]
+---
+
+# Code Quality Standards
+
+## C# 14 / .NET 10 Idioms
+
+### Use Records for DTOs and Value Objects
+```csharp
+// DTO
+public sealed record UserDto(Guid Id, string Email, string Name);
+
+// Value Object
+public sealed record Money(decimal Amount, string Currency);
+
+// Command
+public sealed record CreateUserCommand(string Email, string Name) : IRequest<Result<Guid>>;
+```
+
+### Primary Constructors (where appropriate)
+```csharp
+public sealed class UserService(IUserRepository userRepository, ILogger<UserService> logger)
+{
+    public async Task<User?> GetByIdAsync(Guid id, CancellationToken ct)
+        => await userRepository.GetByIdAsync(id, ct);
+}
+```
+
+### Nullable Reference Types
+- ALWAYS enable `<Nullable>enable</Nullable>` in project
+- Use `?` for nullable references, no null without it
+- Use `!` (null-forgiving) sparingly and only when certain
+
+```csharp
+public string? MiddleName { get; init; }  // Nullable
+public string FirstName { get; init; }     // Never null
+```
+
+### Pattern Matching
+```csharp
+return user switch
+{
+    null => NotFound(),
+    { IsActive: false } => Forbid(),
+    _ => Ok(user)
+};
+```
+
+## Naming Conventions
+
+| Element | Convention | Example |
+|---------|------------|---------|
+| Class | PascalCase | `UserService` |
+| Interface | IPascalCase | `IUserRepository` |
+| Method | PascalCase | `GetByIdAsync` |
+| Parameter | camelCase | `userId` |
+| Private field | _camelCase | `_userRepository` |
+| Constant | PascalCase | `MaxRetryCount` |
+| Async method | Suffix Async | `SaveChangesAsync` |
+
+## Self-Documenting Code
+
+- Use **intention-revealing names** — `GetActiveUsersByDepartment` not `GetUsers`
+- Prefer clarity over brevity
+- Comments explain **why**, not **what**
+- Extract complex conditions into named booleans or methods
+
+```csharp
+// BAD
+if (u.Status == 1 && u.CreatedAt > DateTime.Now.AddDays(-30)) { }
+
+// GOOD
+var isRecentlyActiveUser = user.IsActive && user.WasCreatedWithin(days: 30);
+if (isRecentlyActiveUser) { }
+```
+
+## Anti-Patterns to Avoid
+
+- ❌ God classes with too many responsibilities
+- ❌ Anemic domain models (logic in services, dumb entities)
+- ❌ Premature optimization
+- ❌ Over-engineering for hypothetical requirements
+- ❌ Catching generic `Exception` without proper handling
+- ❌ Magic numbers and hardcoded strings
+- ❌ Circular dependencies
+- ❌ `async void` (except event handlers)
+
+## Boy Scout Rule
+
+> "Always leave the code better than you found it."
+
+- Fix small issues as you encounter them
+- Remove dead code and unused imports
+- Keep improvements proportional to the task
+
+**See also:** `architecture.mdc`

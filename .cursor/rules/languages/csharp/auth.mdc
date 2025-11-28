@@ -1,0 +1,120 @@
+---
+description: "Authentication and authorization patterns - JWT Bearer, policy-based auth, claims"
+globs: ["**/*Auth*.cs", "**/Authorization/**/*.cs", "**/Identity/**/*.cs", "**/*Policy*.cs"]
+---
+
+# Authentication & Authorization
+
+## JWT Bearer Setup
+
+```csharp
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = builder.Configuration["Jwt:Issuer"],
+            ValidAudience = builder.Configuration["Jwt:Audience"],
+            IssuerSigningKey = new SymmetricSecurityKey(
+                Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]!)),
+            ClockSkew = TimeSpan.Zero
+        };
+    });
+
+builder.Services.AddAuthorization();
+
+// Middleware order matters!
+app.UseAuthentication();
+app.UseAuthorization();
+```
+
+## Policy-Based Authorization
+
+```csharp
+// Define policies
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("AdminOnly", policy => 
+        policy.RequireRole("Admin"));
+
+    options.AddPolicy("CanEditUsers", policy =>
+        policy.RequireClaim("Permission", "users:edit"));
+
+    options.AddPolicy("MinimumAge", policy =>
+        policy.Requirements.Add(new MinimumAgeRequirement(18)));
+});
+
+// Use on controllers/actions
+[Authorize(Policy = "AdminOnly")]
+[HttpDelete("{id:guid}")]
+public async Task<IActionResult> Delete(Guid id)
+```
+
+## Custom Authorization Handler
+
+```csharp
+public sealed class MinimumAgeRequirement : IAuthorizationRequirement
+{
+    public int MinimumAge { get; }
+    public MinimumAgeRequirement(int minimumAge) => MinimumAge = minimumAge;
+}
+
+public sealed class MinimumAgeHandler : AuthorizationHandler<MinimumAgeRequirement>
+{
+    protected override Task HandleRequirementAsync(
+        AuthorizationHandlerContext context,
+        MinimumAgeRequirement requirement)
+    {
+        var dateOfBirthClaim = context.User.FindFirst(c => c.Type == "DateOfBirth");
+        if (dateOfBirthClaim is null)
+            return Task.CompletedTask;
+
+        var dob = DateTime.Parse(dateOfBirthClaim.Value);
+        var age = DateTime.Today.Year - dob.Year;
+
+        if (age >= requirement.MinimumAge)
+            context.Succeed(requirement);
+
+        return Task.CompletedTask;
+    }
+}
+
+// Register
+builder.Services.AddSingleton<IAuthorizationHandler, MinimumAgeHandler>();
+```
+
+## Resource-Based Authorization
+
+```csharp
+public sealed class DocumentAuthorizationHandler 
+    : AuthorizationHandler<OperationAuthorizationRequirement, Document>
+{
+    protected override Task HandleRequirementAsync(
+        AuthorizationHandlerContext context,
+        OperationAuthorizationRequirement requirement,
+        Document resource)
+    {
+        var userId = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        
+        if (requirement.Name == Operations.Read.Name && resource.IsPublic)
+            context.Succeed(requirement);
+        else if (resource.OwnerId.ToString() == userId)
+            context.Succeed(requirement);
+
+        return Task.CompletedTask;
+    }
+}
+```
+
+## Conventions
+
+- Use `[Authorize]` at controller level, `[AllowAnonymous]` for exceptions
+- NEVER store sensitive data in JWT payload (it's base64, not encrypted)
+- Use short-lived access tokens (15-30 min) with refresh tokens
+- Validate tokens on every request (don't cache authorization decisions)
+
+**See also:** `security.mdc`, `request-input-sanitization.mdc`

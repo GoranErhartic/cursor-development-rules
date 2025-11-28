@@ -1,0 +1,384 @@
+---
+description: "Structured logging with SLF4J, Logback, MDC, and Micrometer"
+globs: ["**/application.yml", "**/logback-spring.xml", "**/*Filter*.java", "**/*Interceptor*.java"]
+---
+
+# Structured Logging
+
+## SLF4J with Logback
+
+Spring Boot uses SLF4J with Logback by default. No additional dependencies needed for basic logging.
+
+## Configuration (logback-spring.xml)
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    
+    <springProperty scope="context" name="applicationName" source="spring.application.name"/>
+    
+    <!-- Console appender with JSON format for production -->
+    <appender name="CONSOLE_JSON" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeMdcKeyName>correlationId</includeMdcKeyName>
+            <includeMdcKeyName>userId</includeMdcKeyName>
+            <includeMdcKeyName>requestId</includeMdcKeyName>
+            <customFields>{"application":"${applicationName}"}</customFields>
+        </encoder>
+    </appender>
+    
+    <!-- Console appender with pattern for development -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} [%X{correlationId}] - %msg%n</pattern>
+        </encoder>
+    </appender>
+    
+    <!-- File appender -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/application.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>logs/application-%d{yyyy-MM-dd}.log</fileNamePattern>
+            <maxHistory>7</maxHistory>
+            <totalSizeCap>1GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} [%X{correlationId}] - %msg%n</pattern>
+        </encoder>
+    </appender>
+    
+    <!-- Spring profile-specific configuration -->
+    <springProfile name="dev,local">
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+    
+    <springProfile name="prod">
+        <root level="INFO">
+            <appender-ref ref="CONSOLE_JSON"/>
+            <appender-ref ref="FILE"/>
+        </root>
+    </springProfile>
+    
+    <!-- Reduce noise from frameworks -->
+    <logger name="org.springframework.web" level="WARN"/>
+    <logger name="org.springframework.data" level="WARN"/>
+    <logger name="org.hibernate" level="WARN"/>
+    <logger name="org.apache.kafka" level="WARN"/>
+</configuration>
+```
+
+## Dependency for JSON Logging
+
+```xml
+<dependency>
+    <groupId>net.logstash.logback</groupId>
+    <artifactId>logstash-logback-encoder</artifactId>
+    <version>7.4</version>
+</dependency>
+```
+
+## Structured Logging Best Practices
+
+```java
+@Service
+public class UserService {
+    
+    private static final Logger log = LoggerFactory.getLogger(UserService.class);
+    
+    public UserDto createUser(CreateUserRequest request) {
+        // CORRECT - Structured with named placeholders
+        log.info("Creating user with email: {}", request.email());
+        
+        // WRONG - String concatenation (loses structure)
+        log.info("Creating user with email: " + request.email());
+        
+        try {
+            var user = userRepository.save(toEntity(request));
+            
+            // Include relevant context
+            log.info("User created successfully: userId={}, email={}", 
+                user.getId(), user.getEmail());
+            
+            return toDto(user);
+            
+        } catch (DataIntegrityViolationException e) {
+            // Include exception and context
+            log.error("Failed to create user: email={}, error={}", 
+                request.email(), e.getMessage(), e);
+            throw new DomainException(UserErrors.EMAIL_ALREADY_EXISTS);
+        }
+    }
+}
+```
+
+## MDC (Mapped Diagnostic Context)
+
+```java
+@Component
+@Order(Ordered.HIGHEST_PRECEDENCE)
+public class MdcFilter implements Filter {
+    
+    private static final String CORRELATION_ID_HEADER = "X-Correlation-Id";
+    private static final String REQUEST_ID_HEADER = "X-Request-Id";
+    
+    @Override
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
+            throws IOException, ServletException {
+        
+        var httpRequest = (HttpServletRequest) request;
+        var httpResponse = (HttpServletResponse) response;
+        
+        try {
+            // Get or generate correlation ID
+            var correlationId = httpRequest.getHeader(CORRELATION_ID_HEADER);
+            if (correlationId == null || correlationId.isBlank()) {
+                correlationId = UUID.randomUUID().toString();
+            }
+            
+            var requestId = UUID.randomUUID().toString();
+            
+            // Put in MDC (available to all log statements in this request)
+            MDC.put("correlationId", correlationId);
+            MDC.put("requestId", requestId);
+            
+            // Add to response headers
+            httpResponse.setHeader(CORRELATION_ID_HEADER, correlationId);
+            httpResponse.setHeader(REQUEST_ID_HEADER, requestId);
+            
+            chain.doFilter(request, response);
+            
+        } finally {
+            // Clean up MDC to prevent memory leaks
+            MDC.clear();
+        }
+    }
+}
+```
+
+## User Context in MDC
+
+```java
+@Component
+public class UserContextInterceptor implements HandlerInterceptor {
+    
+    @Override
+    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        
+        if (authentication != null && authentication.isAuthenticated()) {
+            var userId = authentication.getName();
+            MDC.put("userId", userId);
+        }
+        
+        return true;
+    }
+    
+    @Override
+    public void afterCompletion(HttpServletRequest request, HttpServletResponse response, 
+                                Object handler, Exception ex) {
+        MDC.remove("userId");
+    }
+}
+
+@Configuration
+public class WebMvcConfig implements WebMvcConfigurer {
+    
+    @Override
+    public void addInterceptors(InterceptorRegistry registry) {
+        registry.addInterceptor(new UserContextInterceptor());
+    }
+}
+```
+
+## Log Levels
+
+| Level | Use Case | Example |
+|-------|----------|---------|
+| `TRACE` | Very detailed debugging | Method entry/exit, variable values |
+| `DEBUG` | Development diagnostics | Query execution, cache hits |
+| `INFO` | Normal operations | Request/response, business events |
+| `WARN` | Unexpected but recoverable | Deprecated API usage, fallback triggered |
+| `ERROR` | Exceptions, failures | Database errors, external service failures |
+
+## Example Usage
+
+```java
+@RestController
+@RequestMapping("/api/orders")
+public class OrderController {
+    
+    private static final Logger log = LoggerFactory.getLogger(OrderController.class);
+    
+    @PostMapping
+    public ResponseEntity<OrderDto> createOrder(@Valid @RequestBody CreateOrderRequest request) {
+        log.info("Received create order request: userId={}, itemCount={}", 
+            request.userId(), request.items().size());
+        
+        try {
+            var order = orderService.create(request);
+            
+            log.info("Order created successfully: orderId={}, userId={}, total={}", 
+                order.id(), order.userId(), order.total());
+            
+            return ResponseEntity.ok(order);
+            
+        } catch (InsufficientStockException e) {
+            log.warn("Order creation failed due to insufficient stock: userId={}, productId={}", 
+                request.userId(), e.getProductId());
+            throw e;
+            
+        } catch (Exception e) {
+            log.error("Unexpected error creating order: userId={}", 
+                request.userId(), e);
+            throw e;
+        }
+    }
+}
+```
+
+## Async Logging
+
+```xml
+<!-- logback-spring.xml -->
+<appender name="ASYNC" class="ch.qos.logback.classic.AsyncAppender">
+    <queueSize>512</queueSize>
+    <discardingThreshold>0</discardingThreshold>
+    <appender-ref ref="CONSOLE_JSON"/>
+</appender>
+
+<root level="INFO">
+    <appender-ref ref="ASYNC"/>
+</root>
+```
+
+## Conditional Logging
+
+```java
+// Only build expensive log message if DEBUG is enabled
+if (log.isDebugEnabled()) {
+    log.debug("Complex query result: {}", buildExpensiveDebugMessage());
+}
+
+// Lambda for lazy evaluation
+log.debug("Query result: {}", () -> buildExpensiveDebugMessage());
+```
+
+## Micrometer Integration
+
+```xml
+<dependency>
+    <groupId>io.micrometer</groupId>
+    <artifactId>micrometer-registry-prometheus</artifactId>
+</dependency>
+```
+
+```java
+@Service
+public class MetricsService {
+    
+    private final MeterRegistry meterRegistry;
+    private final Counter userCreationCounter;
+    private final Timer userCreationTimer;
+    
+    public MetricsService(MeterRegistry meterRegistry) {
+        this.meterRegistry = meterRegistry;
+        this.userCreationCounter = Counter.builder("user.created")
+            .description("Number of users created")
+            .register(meterRegistry);
+        this.userCreationTimer = Timer.builder("user.creation.time")
+            .description("Time taken to create user")
+            .register(meterRegistry);
+    }
+    
+    public UserDto createUser(CreateUserRequest request) {
+        return userCreationTimer.record(() -> {
+            var user = doCreateUser(request);
+            userCreationCounter.increment();
+            return user;
+        });
+    }
+}
+```
+
+## Request/Response Logging
+
+```java
+@Component
+public class RequestResponseLoggingFilter implements Filter {
+    
+    private static final Logger log = LoggerFactory.getLogger(RequestResponseLoggingFilter.class);
+    
+    @Override
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
+            throws IOException, ServletException {
+        
+        var httpRequest = (HttpServletRequest) request;
+        var httpResponse = (HttpServletResponse) response;
+        
+        var startTime = System.currentTimeMillis();
+        
+        log.info("Incoming request: method={}, uri={}, remoteAddr={}", 
+            httpRequest.getMethod(),
+            httpRequest.getRequestURI(),
+            httpRequest.getRemoteAddr());
+        
+        try {
+            chain.doFilter(request, response);
+        } finally {
+            var duration = System.currentTimeMillis() - startTime;
+            
+            log.info("Completed request: method={}, uri={}, status={}, duration={}ms",
+                httpRequest.getMethod(),
+                httpRequest.getRequestURI(),
+                httpResponse.getStatus(),
+                duration);
+        }
+    }
+}
+```
+
+## Conventions
+
+- ALWAYS use SLF4J, never `System.out.println()`
+- ALWAYS use structured logging with placeholders `{}`
+- ALWAYS include correlation IDs in logs
+- NEVER log sensitive data (passwords, tokens, PII without masking)
+- Use appropriate log levels
+- Include exception object as last parameter in `log.error()`
+- Configure log level overrides to reduce noise from frameworks
+- Use MDC for request-scoped context (correlation ID, user ID)
+- Clean up MDC in `finally` blocks or filters
+- Use async appenders for high-throughput applications
+
+## Sensitive Data Masking
+
+```java
+public class SensitiveDataMasker {
+    
+    private static final Pattern EMAIL_PATTERN = 
+        Pattern.compile("([a-zA-Z0-9._%+-]+)@([a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})");
+    
+    public static String maskEmail(String email) {
+        if (email == null || email.length() < 3) return "***";
+        
+        var matcher = EMAIL_PATTERN.matcher(email);
+        if (!matcher.matches()) return "***";
+        
+        var localPart = matcher.group(1);
+        var domain = matcher.group(2);
+        
+        var masked = localPart.substring(0, 1) + "***" + 
+                    localPart.substring(localPart.length() - 1);
+        
+        return masked + "@" + domain;
+    }
+    
+    // Usage
+    log.info("User email: {}", SensitiveDataMasker.maskEmail(user.getEmail()));
+}
+```
+
+**See also:** `error-handling.mdc`, `security.mdc`

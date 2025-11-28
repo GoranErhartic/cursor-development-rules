@@ -1,0 +1,184 @@
+---
+description: "Maven dependencies - BOM, dependency management, versioning, security, licensing"
+globs: ["**/pom.xml", "**/settings.xml"]
+---
+
+# Dependencies & Maven
+
+## Dependency Management with BOM
+
+Use `<dependencyManagement>` in parent `pom.xml`:
+
+```xml
+<dependencyManagement>
+    <dependencies>
+        <!-- Spring Boot BOM -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-dependencies</artifactId>
+            <version>3.2.0</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+        
+        <!-- Spring Cloud BOM -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-dependencies</artifactId>
+            <version>2023.0.0</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+        
+        <!-- Testing -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-bom</artifactId>
+            <version>1.19.3</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+    </dependencies>
+</dependencyManagement>
+```
+
+In module `pom.xml` files, omit version:
+```xml
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-web</artifactId>
+</dependency>
+```
+
+## Package Selection Criteria
+
+- **ONLY use free and open-source packages**
+- Acceptable licenses: Apache 2.0, MIT, BSD, EPL, LGPL, MPL, or any OSI-approved free license
+- **STOP and ask** before introducing packages with commercial/paid tiers
+- Be cautious with copyleft licenses (GPL, AGPL) — they have viral implications
+- Verify license before adding any new dependency
+- **NEVER use packages that require paid licenses for production use**
+- Favor actively maintained packages with community support
+- Verify security — check for known vulnerabilities
+
+## Security Scanning
+
+```bash
+# Check for vulnerable packages
+mvn org.owasp:dependency-check-maven:check
+
+# List dependencies
+mvn dependency:tree
+
+# Check for updates
+mvn versions:display-dependency-updates
+```
+
+- Enable Dependabot or similar for automated scanning
+- Review and update dependencies regularly
+- NEVER ignore security advisories
+
+## License Verification
+
+```bash
+# Generate license report (requires license-maven-plugin)
+mvn license:add-third-party
+
+# Or use license-maven-plugin to generate report
+mvn org.codehaus.mojo:license-maven-plugin:aggregate-third-party-report
+```
+
+- Verify licenses before adding new dependencies
+- Document any packages with copyleft licenses
+- Review license compatibility with your project's license
+
+## Recommended Packages
+
+| Purpose | Package |
+|---------|---------|
+| Web | spring-boot-starter-web |
+| Validation | spring-boot-starter-validation |
+| Data | spring-boot-starter-data-jpa |
+| Security | spring-boot-starter-security |
+| Messaging | spring-cloud-stream |
+| Resilience | resilience4j-spring-boot3 |
+| Testing | spring-boot-starter-test, testcontainers |
+| Logging | logback-classic (included) |
+| Monitoring | spring-boot-starter-actuator, micrometer-registry-prometheus |
+
+## Conventions
+
+- Use Spring Boot BOM to manage versions
+- Pin versions only when you need a specific version different from BOM
+- Document any third-party dependencies with licensing implications
+- NEVER use deprecated or unmaintained packages
+- Keep Spring Boot version up to date with latest patch releases
+
+## Common Dependencies
+
+```xml
+<dependencies>
+    <!-- Web -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    
+    <!-- Validation -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+    
+    <!-- Data -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+    
+    <!-- PostgreSQL -->
+    <dependency>
+        <groupId>org.postgresql</groupId>
+        <artifactId>postgresql</artifactId>
+        <scope>runtime</scope>
+    </dependency>
+    
+    <!-- Security -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-security</artifactId>
+    </dependency>
+    
+    <!-- JWT -->
+    <dependency>
+        <groupId>io.jsonwebtoken</groupId>
+        <artifactId>jjwt-api</artifactId>
+        <version>0.12.3</version>
+    </dependency>
+    
+    <!-- Resilience -->
+    <dependency>
+        <groupId>io.github.resilience4j</groupId>
+        <artifactId>resilience4j-spring-boot3</artifactId>
+    </dependency>
+    
+    <!-- Messaging -->
+    <dependency>
+        <groupId>org.springframework.cloud</groupId>
+        <artifactId>spring-cloud-stream</artifactId>
+    </dependency>
+    
+    <!-- Testing -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-test</artifactId>
+        <scope>test</scope>
+    </dependency>
+    
+    <dependency>
+        <groupId>org.testcontainers</groupId>
+        <artifactId>postgresql</artifactId>
+        <scope>test</scope>
+    </dependency>
+</dependencies>
+```

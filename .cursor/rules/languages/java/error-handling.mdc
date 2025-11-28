@@ -1,0 +1,176 @@
+---
+description: "Error handling patterns - @ControllerAdvice, Result pattern, ProblemDetail (RFC 7807)"
+globs: ["**/*Exception*.java", "**/*Error*.java", "**/*Result*.java", "**/*Advice*.java"]
+---
+
+# Error Handling
+
+## Result Pattern
+
+```java
+// Non-generic Result for operations without return values
+public sealed interface Result {
+    record Success() implements Result {}
+    record Failure(Error error) implements Result {}
+    
+    static Result success() { return new Success(); }
+    static Result failure(Error error) { return new Failure(error); }
+    
+    default boolean isSuccess() { return this instanceof Success; }
+    default boolean isFailure() { return this instanceof Failure; }
+}
+
+// Generic Result for operations with return values
+public sealed interface Result<T> {
+    record Success<T>(T value) implements Result<T> {}
+    record Failure<T>(Error error) implements Result<T> {}
+    
+    static <T> Result<T> success(T value) { return new Success<>(value); }
+    static <T> Result<T> failure(Error error) { return new Failure<>(error); }
+    
+    default boolean isSuccess() { return this instanceof Success<T>; }
+    default boolean isFailure() { return this instanceof Failure<T>; }
+    
+    default <R> R match(Function<T, R> onSuccess, Function<Error, R> onFailure) {
+        return switch (this) {
+            case Success<T>(var value) -> onSuccess.apply(value);
+            case Failure<T>(var error) -> onFailure.apply(error);
+        };
+    }
+}
+
+public record Error(String code, String message) {}
+
+// Domain errors as static members
+public final class UserErrors {
+    public static final Error NOT_FOUND = new Error("User.NotFound", "User was not found");
+    public static final Error EMAIL_ALREADY_EXISTS = new Error("User.EmailExists", "Email already exists");
+    
+    private UserErrors() {}
+}
+```
+
+## Global Exception Handler
+
+```java
+@RestControllerAdvice
+@Slf4j
+public class GlobalExceptionHandler {
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ProblemDetail> handleValidationException(MethodArgumentNotValidException ex) {
+        var problemDetail = ProblemDetail.forStatusAndDetail(
+            HttpStatus.BAD_REQUEST,
+            "Validation failed"
+        );
+        problemDetail.setTitle("Validation Error");
+        
+        var errors = ex.getBindingResult().getFieldErrors().stream()
+            .collect(Collectors.groupingBy(
+                FieldError::getField,
+                Collectors.mapping(FieldError::getDefaultMessage, Collectors.toList())
+            ));
+        
+        problemDetail.setProperty("errors", errors);
+        
+        return ResponseEntity.badRequest().body(problemDetail);
+    }
+    
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ProblemDetail> handleConstraintViolation(ConstraintViolationException ex) {
+        var problemDetail = ProblemDetail.forStatusAndDetail(
+            HttpStatus.BAD_REQUEST,
+            "Constraint violation"
+        );
+        problemDetail.setTitle("Validation Error");
+        
+        var errors = ex.getConstraintViolations().stream()
+            .collect(Collectors.groupingBy(
+                v -> v.getPropertyPath().toString(),
+                Collectors.mapping(ConstraintViolation::getMessage, Collectors.toList())
+            ));
+        
+        problemDetail.setProperty("errors", errors);
+        
+        return ResponseEntity.badRequest().body(problemDetail);
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ProblemDetail> handleUnexpectedException(Exception ex, HttpServletRequest request) {
+        log.error("Unhandled exception occurred", ex);
+        
+        var problemDetail = ProblemDetail.forStatusAndDetail(
+            HttpStatus.INTERNAL_SERVER_ERROR,
+            "An unexpected error occurred. Please try again later."
+        );
+        problemDetail.setTitle("Internal Server Error");
+        problemDetail.setInstance(URI.create(request.getRequestURI()));
+        
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(problemDetail);
+    }
+}
+```
+
+## Controller Error Mapping
+
+```java
+@GetMapping("/{id}")
+public ResponseEntity<UserDto> getById(@PathVariable UUID id) {
+    var result = getUserQuery.execute(id);
+    
+    return result.match(
+        success -> ResponseEntity.ok(success),
+        error -> switch (error.code()) {
+            case "User.NotFound" -> ResponseEntity.notFound().build();
+            default -> ResponseEntity.badRequest()
+                .body(toProblemDetail(error, HttpStatus.BAD_REQUEST));
+        }
+    );
+}
+
+private ProblemDetail toProblemDetail(Error error, HttpStatus status) {
+    var problemDetail = ProblemDetail.forStatusAndDetail(status, error.message());
+    problemDetail.setTitle(error.code());
+    return problemDetail;
+}
+```
+
+## Custom Exceptions
+
+```java
+// Domain exception for business rule violations
+public class DomainException extends RuntimeException {
+    private final Error error;
+    
+    public DomainException(Error error) {
+        super(error.message());
+        this.error = error;
+    }
+    
+    public Error getError() { return error; }
+}
+
+// Handler for domain exceptions
+@ExceptionHandler(DomainException.class)
+public ResponseEntity<ProblemDetail> handleDomainException(DomainException ex) {
+    var error = ex.getError();
+    var problemDetail = ProblemDetail.forStatusAndDetail(
+        HttpStatus.BAD_REQUEST,
+        error.message()
+    );
+    problemDetail.setTitle(error.code());
+    
+    return ResponseEntity.badRequest().body(problemDetail);
+}
+```
+
+## Conventions
+
+- NEVER expose stack traces or internal details in production
+- Use `ProblemDetail` (RFC 7807) for all error responses
+- Log exceptions with correlation IDs (see `logging.mdc`)
+- Handle specific exceptions, not generic `Exception`
+- Domain errors are NOT exceptions — use Result pattern
+- Use `@RestControllerAdvice` for global exception handling
+
+**See also:** `logging.mdc`, `cqrs.mdc`

@@ -1,0 +1,472 @@
+---
+description: "Security practices for Spring Boot - secrets management, HTTPS, headers, CORS"
+globs: ["**/application.yml", "**/*Security*.java", "**/*Config*.java"]
+---
+
+# Security Practices
+
+## Critical Rules
+
+- **NEVER expose secrets, API keys, or credentials in code**
+- **NEVER commit secrets to source control**
+- **ALWAYS use HTTPS in production**
+- **ALWAYS validate and sanitize user input**
+
+## Secrets Management
+
+```yaml
+# application.yml - NEVER store actual secrets here
+spring:
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+  
+jwt:
+  secret: ${JWT_SECRET}
+  expiration: ${JWT_EXPIRATION:3600000}
+```
+
+### Environment Variables
+
+```bash
+# .env (for local development only - add to .gitignore)
+DB_URL=jdbc:postgresql://localhost:5432/mydb
+DB_USERNAME=postgres
+DB_PASSWORD=secret
+JWT_SECRET=base64-encoded-secret-key
+```
+
+### Spring Boot Configuration Processor
+
+```java
+@ConfigurationProperties(prefix = "app.security")
+public record SecurityProperties(
+    String jwtSecret,
+    long jwtExpiration,
+    long refreshTokenExpiration
+) {}
+
+@Configuration
+@EnableConfigurationProperties(SecurityProperties.class)
+public class SecurityConfig {
+    // ...
+}
+```
+
+### Production Secrets Management
+
+Use one of:
+- **Kubernetes Secrets**
+- **AWS Secrets Manager**
+- **Azure Key Vault**
+- **HashiCorp Vault**
+- **Environment variables** (minimum)
+
+## Security Headers
+
+```java
+@Configuration
+public class SecurityHeadersConfig {
+    
+    @Bean
+    public FilterRegistrationBean<SecurityHeadersFilter> securityHeadersFilter() {
+        var registration = new FilterRegistrationBean<SecurityHeadersFilter>();
+        registration.setFilter(new SecurityHeadersFilter());
+        registration.addUrlPatterns("/*");
+        registration.setOrder(1);
+        return registration;
+    }
+}
+
+public class SecurityHeadersFilter implements Filter {
+    
+    @Override
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
+            throws IOException, ServletException {
+        
+        var httpResponse = (HttpServletResponse) response;
+        
+        // Prevent MIME type sniffing
+        httpResponse.setHeader("X-Content-Type-Options", "nosniff");
+        
+        // Prevent clickjacking
+        httpResponse.setHeader("X-Frame-Options", "DENY");
+        
+        // XSS protection
+        httpResponse.setHeader("X-XSS-Protection", "1; mode=block");
+        
+        // Referrer policy
+        httpResponse.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+        
+        // Content Security Policy
+        httpResponse.setHeader("Content-Security-Policy", 
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'");
+        
+        // HSTS (only in production with HTTPS)
+        httpResponse.setHeader("Strict-Transport-Security", 
+            "max-age=31536000; includeSubDomains");
+        
+        chain.doFilter(request, response);
+    }
+}
+```
+
+## CORS Configuration
+
+```java
+@Configuration
+public class CorsConfig {
+    
+    @Bean
+    public WebMvcConfigurer corsConfigurer() {
+        return new WebMvcConfigurer() {
+            @Override
+            public void addCorsMappings(CorsRegistry registry) {
+                registry.addMapping("/api/**")
+                    .allowedOrigins("https://yourdomain.com")
+                    .allowedMethods("GET", "POST", "PUT", "DELETE", "PATCH")
+                    .allowedHeaders("*")
+                    .allowCredentials(true)
+                    .maxAge(3600);
+            }
+        };
+    }
+}
+
+// Or in SecurityConfig
+@Bean
+public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    http
+        .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+        // ... other config
+        
+    return http.build();
+}
+
+@Bean
+public CorsConfigurationSource corsConfigurationSource() {
+    var configuration = new CorsConfiguration();
+    configuration.setAllowedOrigins(List.of("https://yourdomain.com"));
+    configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH"));
+    configuration.setAllowedHeaders(List.of("*"));
+    configuration.setAllowCredentials(true);
+    
+    var source = new UrlBasedCorsConfigurationSource();
+    source.registerCorsConfiguration("/api/**", configuration);
+    return source;
+}
+```
+
+**NEVER use:**
+```java
+// DON'T DO THIS
+.allowedOrigins("*")
+.allowCredentials(true)  // Can't use both together, and * is unsafe
+```
+
+## HTTPS Configuration
+
+```yaml
+# application.yml (production)
+server:
+  port: 8443
+  ssl:
+    enabled: true
+    key-store: ${SSL_KEYSTORE_PATH}
+    key-store-password: ${SSL_KEYSTORE_PASSWORD}
+    key-store-type: PKCS12
+    key-alias: tomcat
+```
+
+```java
+// Force HTTPS redirect
+@Configuration
+public class HttpsConfig {
+    
+    @Bean
+    public ServletWebServerFactory servletContainer() {
+        var tomcat = new TomcatServletWebServerFactory() {
+            @Override
+            protected void postProcessContext(Context context) {
+                var securityConstraint = new SecurityConstraint();
+                securityConstraint.setUserConstraint("CONFIDENTIAL");
+                
+                var collection = new SecurityCollection();
+                collection.addPattern("/*");
+                
+                securityConstraint.addCollection(collection);
+                context.addConstraint(securityConstraint);
+            }
+        };
+        
+        tomcat.addAdditionalTomcatConnectors(httpConnector());
+        return tomcat;
+    }
+    
+    private Connector httpConnector() {
+        var connector = new Connector(TomcatServletWebServerFactory.DEFAULT_PROTOCOL);
+        connector.setScheme("http");
+        connector.setPort(8080);
+        connector.setSecure(false);
+        connector.setRedirectPort(8443);
+        return connector;
+    }
+}
+```
+
+## Rate Limiting
+
+```java
+@Configuration
+public class RateLimitConfig {
+    
+    @Bean
+    public FilterRegistrationBean<RateLimitFilter> rateLimitFilter() {
+        var registration = new FilterRegistrationBean<RateLimitFilter>();
+        registration.setFilter(new RateLimitFilter());
+        registration.addUrlPatterns("/api/*");
+        return registration;
+    }
+}
+
+// Using Bucket4j
+public class RateLimitFilter implements Filter {
+    
+    private final Map<String, Bucket> cache = new ConcurrentHashMap<>();
+    
+    @Override
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
+            throws IOException, ServletException {
+        
+        var httpRequest = (HttpServletRequest) request;
+        var httpResponse = (HttpServletResponse) response;
+        
+        var clientId = getClientId(httpRequest);
+        var bucket = resolveBucket(clientId);
+        
+        if (bucket.tryConsume(1)) {
+            chain.doFilter(request, response);
+        } else {
+            httpResponse.setStatus(429);
+            httpResponse.getWriter().write("Too many requests");
+        }
+    }
+    
+    private Bucket resolveBucket(String clientId) {
+        return cache.computeIfAbsent(clientId, k -> createNewBucket());
+    }
+    
+    private Bucket createNewBucket() {
+        var limit = Bandwidth.builder()
+            .capacity(100)
+            .refillIntervally(100, Duration.ofMinutes(1))
+            .build();
+        
+        return Bucket.builder()
+            .addLimit(limit)
+            .build();
+    }
+    
+    private String getClientId(HttpServletRequest request) {
+        // Use API key, user ID, or IP address
+        return request.getRemoteAddr();
+    }
+}
+```
+
+## Input Validation
+
+```java
+// Always validate at API boundary
+@PostMapping("/users")
+public ResponseEntity<UserDto> createUser(
+        @Valid @RequestBody CreateUserRequest request) {
+    // Spring automatically validates and throws MethodArgumentNotValidException
+    return ResponseEntity.ok(userService.create(request));
+}
+
+// Request DTO with validation
+public record CreateUserRequest(
+    @NotBlank
+    @Email
+    @Size(max = 256)
+    String email,
+    
+    @NotBlank
+    @Size(min = 2, max = 100)
+    String name,
+    
+    @NotBlank
+    @Size(min = 8, message = "Password must be at least 8 characters")
+    @Pattern(regexp = "^(?=.*[A-Za-z])(?=.*\\d)(?=.*[@$!%*#?&])[A-Za-z\\d@$!%*#?&]{8,}$",
+             message = "Password must contain letters, numbers, and special characters")
+    String password
+) {}
+```
+
+## Dependency Security
+
+```xml
+<!-- Maven dependency check plugin -->
+<plugin>
+    <groupId>org.owasp</groupId>
+    <artifactId>dependency-check-maven</artifactId>
+    <version>9.0.7</version>
+    <executions>
+        <execution>
+            <goals>
+                <goal>check</goal>
+            </goals>
+        </execution>
+    </executions>
+</plugin>
+```
+
+```bash
+# Check for vulnerable dependencies
+mvn org.owasp:dependency-check-maven:check
+
+# Update dependencies
+mvn versions:display-dependency-updates
+```
+
+## Actuator Security
+
+```yaml
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+      roles: ADMIN
+```
+
+```java
+@Configuration
+public class ActuatorSecurityConfig {
+    
+    @Bean
+    public SecurityFilterChain actuatorSecurityFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher("/actuator/**")
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/actuator/health").permitAll()
+                .requestMatchers("/actuator/**").hasRole("ADMIN")
+            );
+        
+        return http.build();
+    }
+}
+```
+
+## SQL Injection Prevention
+
+```java
+// GOOD - Use JPA/JPQL with parameters
+@Query("SELECT u FROM User u WHERE u.email = :email")
+Optional<User> findByEmail(@Param("email") String email);
+
+// GOOD - Native query with parameters
+@Query(value = "SELECT * FROM users WHERE email = :email", nativeQuery = true)
+Optional<User> findByEmailNative(@Param("email") String email);
+
+// NEVER - String concatenation
+@Query(value = "SELECT * FROM users WHERE email = '" + email + "'", nativeQuery = true) // VULNERABLE!
+```
+
+## XSS Prevention
+
+```java
+// Spring automatically escapes in templates
+// For REST APIs returning JSON, Jackson handles escaping
+
+// If you need to return HTML content, use OWASP Java HTML Sanitizer
+import org.owasp.html.PolicyFactory;
+import org.owasp.html.Sanitizers;
+
+public class HtmlSanitizer {
+    private static final PolicyFactory POLICY = Sanitizers.FORMATTING
+        .and(Sanitizers.LINKS);
+    
+    public static String sanitize(String html) {
+        return POLICY.sanitize(html);
+    }
+}
+```
+
+## Password Handling
+
+```java
+@Service
+public class UserService {
+    
+    private final PasswordEncoder passwordEncoder;
+    
+    public UserService(PasswordEncoder passwordEncoder) {
+        this.passwordEncoder = passwordEncoder;
+    }
+    
+    public void createUser(CreateUserRequest request) {
+        var user = new User();
+        user.setEmail(request.email());
+        user.setName(request.name());
+        
+        // ALWAYS hash passwords
+        user.setPassword(passwordEncoder.encode(request.password()));
+        
+        userRepository.save(user);
+    }
+    
+    public boolean verifyPassword(String rawPassword, String encodedPassword) {
+        return passwordEncoder.matches(rawPassword, encodedPassword);
+    }
+}
+
+// Use BCrypt (configured in SecurityConfig)
+@Bean
+public PasswordEncoder passwordEncoder() {
+    return new BCryptPasswordEncoder(12); // Strength: 4-31, default 10
+}
+```
+
+## Audit Logging
+
+```java
+@Aspect
+@Component
+public class SecurityAuditAspect {
+    
+    private static final Logger log = LoggerFactory.getLogger(SecurityAuditAspect.class);
+    
+    @AfterReturning("@annotation(PreAuthorize)")
+    public void logSecurityEvent(JoinPoint joinPoint) {
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        
+        log.info("Security event: user={}, method={}, args={}",
+            authentication.getName(),
+            joinPoint.getSignature().getName(),
+            Arrays.toString(joinPoint.getArgs()));
+    }
+}
+```
+
+## Conventions
+
+- NEVER commit secrets to version control
+- Use environment variables for all sensitive configuration
+- Enable HTTPS in production
+- Add security headers to all responses
+- Configure CORS properly (never use `*` with credentials)
+- Implement rate limiting for public APIs
+- Use BCrypt for password hashing
+- Validate all user input
+- Keep dependencies up to date
+- Enable OWASP dependency check
+- Secure actuator endpoints
+- Log security events (authentication, authorization failures)
+
+**See also:** `auth.mdc`, `input-sanitization.mdc`

@@ -1,0 +1,279 @@
+---
+description: "Jakarta Bean Validation patterns for request validation in Spring Boot"
+globs: ["**/*Validator*.java", "**/*Request*.java", "**/*Command*.java"]
+---
+
+# Jakarta Bean Validation Patterns
+
+## Basic Validation
+
+```java
+import jakarta.validation.constraints.*;
+
+public record CreateUserRequest(
+    @NotBlank(message = "Email is required")
+    @Email(message = "Invalid email format")
+    @Size(max = 256, message = "Email must not exceed 256 characters")
+    String email,
+    
+    @NotBlank(message = "Name is required")
+    @Size(min = 2, max = 100, message = "Name must be between 2 and 100 characters")
+    @Pattern(regexp = "^[\\w\\s-]+$", message = "Name contains invalid characters")
+    String name,
+    
+    @Min(value = 18, message = "Must be at least 18 years old")
+    @Max(value = 120, message = "Age must be realistic")
+    Integer age
+) {}
+```
+
+## Common Constraints
+
+| Scenario | Constraint |
+|----------|-----------|
+| Required | `@NotNull`, `@NotBlank`, `@NotEmpty` |
+| Email | `@Email` |
+| Size | `@Size(min = n, max = m)` |
+| Range | `@Min(n)`, `@Max(m)` |
+| Pattern | `@Pattern(regexp = "...")` |
+| UUID | `@NotNull` (type safety with UUID) |
+| Past/Future | `@Past`, `@Future`, `@PastOrPresent` |
+| Positive | `@Positive`, `@PositiveOrZero` |
+
+## Controller Integration
+
+```java
+@RestController
+@RequestMapping("/api/users")
+@Validated // Enable method-level validation
+public class UserController {
+    
+    // Validate request body
+    @PostMapping
+    public ResponseEntity<UserDto> create(
+        @Valid @RequestBody CreateUserRequest request) {
+        // If validation fails, MethodArgumentNotValidException is thrown
+        var user = userService.create(request);
+        return ResponseEntity.ok(user);
+    }
+    
+    // Validate path variable
+    @GetMapping("/{id}")
+    public ResponseEntity<UserDto> getById(
+        @PathVariable @NotNull UUID id) {
+        // If validation fails, ConstraintViolationException is thrown
+        return userService.findById(id)
+            .map(ResponseEntity::ok)
+            .orElse(ResponseEntity.notFound().build());
+    }
+    
+    // Validate query parameters
+    @GetMapping
+    public ResponseEntity<List<UserDto>> search(
+        @RequestParam @Email String email) {
+        return ResponseEntity.ok(userService.findByEmail(email));
+    }
+}
+```
+
+## Custom Validators
+
+```java
+// Custom constraint annotation
+@Target({ElementType.FIELD, ElementType.PARAMETER})
+@Retention(RetentionPolicy.RUNTIME)
+@Constraint(validatedBy = UniqueEmailValidator.class)
+@Documented
+public @interface UniqueEmail {
+    String message() default "Email already exists";
+    Class<?>[] groups() default {};
+    Class<? extends Payload>[] payload() default {};
+}
+
+// Validator implementation
+@Component
+public class UniqueEmailValidator implements ConstraintValidator<UniqueEmail, String> {
+    
+    private final UserRepository userRepository;
+    
+    public UniqueEmailValidator(UserRepository userRepository) {
+        this.userRepository = userRepository;
+    }
+    
+    @Override
+    public boolean isValid(String email, ConstraintValidatorContext context) {
+        if (email == null) return true;
+        return !userRepository.existsByEmail(email);
+    }
+}
+
+// Usage
+public record CreateUserRequest(
+    @NotBlank
+    @Email
+    @UniqueEmail // Custom validator
+    String email,
+    
+    @NotBlank
+    String name
+) {}
+```
+
+## Nested Validation
+
+```java
+public record CreateOrderRequest(
+    @Valid // Validate nested object
+    @NotNull
+    CustomerInfo customer,
+    
+    @Valid // Validate list elements
+    @NotEmpty
+    List<@Valid OrderItem> items
+) {}
+
+public record CustomerInfo(
+    @NotBlank String name,
+    @Email String email
+) {}
+
+public record OrderItem(
+    @NotNull UUID productId,
+    @Positive Integer quantity
+) {}
+```
+
+## Conditional Validation
+
+```java
+// Group interfaces
+public interface CreateValidation {}
+public interface UpdateValidation {}
+
+public record UserRequest(
+    @Null(groups = CreateValidation.class, message = "ID must be null for create")
+    @NotNull(groups = UpdateValidation.class, message = "ID is required for update")
+    UUID id,
+    
+    @NotBlank
+    @Email
+    String email,
+    
+    @NotBlank
+    String name
+) {}
+
+// Use in controller
+@PostMapping
+public ResponseEntity<UserDto> create(
+    @Validated(CreateValidation.class) @RequestBody UserRequest request) {
+    // ...
+}
+
+@PutMapping("/{id}")
+public ResponseEntity<UserDto> update(
+    @PathVariable UUID id,
+    @Validated(UpdateValidation.class) @RequestBody UserRequest request) {
+    // ...
+}
+```
+
+## Cross-Field Validation
+
+```java
+// Class-level constraint
+@Target(ElementType.TYPE)
+@Retention(RetentionPolicy.RUNTIME)
+@Constraint(validatedBy = PasswordMatchesValidator.class)
+public @interface PasswordMatches {
+    String message() default "Passwords do not match";
+    Class<?>[] groups() default {};
+    Class<? extends Payload>[] payload() default {};
+}
+
+// Validator
+public class PasswordMatchesValidator implements ConstraintValidator<PasswordMatches, PasswordRequest> {
+    
+    @Override
+    public boolean isValid(PasswordRequest request, ConstraintValidatorContext context) {
+        if (request == null) return true;
+        return Objects.equals(request.password(), request.confirmPassword());
+    }
+}
+
+// Usage
+@PasswordMatches
+public record PasswordRequest(
+    @NotBlank
+    @Size(min = 8)
+    String password,
+    
+    @NotBlank
+    String confirmPassword
+) {}
+```
+
+## Custom Validation Messages
+
+```properties
+# src/main/resources/ValidationMessages.properties
+jakarta.validation.constraints.NotBlank.message=Field cannot be blank
+jakarta.validation.constraints.Email.message=Must be a valid email address
+jakarta.validation.constraints.Size.message=Must be between {min} and {max} characters
+
+# Custom messages
+user.email.unique=Email address is already registered
+user.age.range=Age must be between {min} and {max}
+```
+
+## Programmatic Validation
+
+```java
+@Service
+public class UserService {
+    
+    private final Validator validator;
+    
+    public UserService(Validator validator) {
+        this.validator = validator;
+    }
+    
+    public void validateManually(CreateUserRequest request) {
+        Set<ConstraintViolation<CreateUserRequest>> violations = 
+            validator.validate(request);
+        
+        if (!violations.isEmpty()) {
+            throw new ConstraintViolationException(violations);
+        }
+    }
+}
+```
+
+## Conventions
+
+- ALWAYS provide custom error messages
+- Use `@Valid` for nested objects and collections
+- Use `@Validated` on controller class for method-level validation
+- Place validation on DTOs/requests, not domain entities
+- Use groups for different validation scenarios
+- Database-dependent validations (uniqueness) should be in custom validators
+
+## Configuration
+
+```java
+@Configuration
+public class ValidationConfig {
+    
+    @Bean
+    public MethodValidationPostProcessor methodValidationPostProcessor() {
+        return new MethodValidationPostProcessor();
+    }
+    
+    @Bean
+    public LocalValidatorFactoryBean validator() {
+        return new LocalValidatorFactoryBean();
+    }
+}
+```
+
+**See also:** `error-handling.mdc`, `controllers.mdc`

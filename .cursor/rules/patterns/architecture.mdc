@@ -1,0 +1,46 @@
+---
+description: "Universal architecture principles - Clean Architecture, Vertical Slice, CQRS, DDD, SOLID"
+---
+
+# Architecture Principles
+
+## Preferred Patterns
+
+### Vertical Slice Architecture
+- Organize by feature, not by technical layer
+- Each slice contains its own command/query, handler, validator, and entities
+- Minimize cross-slice dependencies
+
+### Clean Architecture
+- **Domain** — Entities, Value Objects, Domain Events (no dependencies)
+- **Application** — Use cases, interfaces, DTOs (depends on Domain)
+- **Infrastructure** — Data access, external services (implements interfaces)
+- **API** — Controllers/endpoints, middleware/filters (composition root)
+
+### CQRS (Command Query Responsibility Segregation)
+- Separate read (queries) from write (commands) operations
+- Use mediator or dispatcher pattern for routing
+- Commands return `Result<T>`, queries return DTOs
+
+### Domain-Driven Design
+- **Aggregates** — Consistency boundaries with single root
+- **Value Objects** — Immutable, equality by value
+- **Domain Events** — Publish for cross-aggregate communication
+
+## Design Principles
+
+| Principle | Application |
+|-----------|-------------|
+| **SOLID** | Single Responsibility, Open/Closed, Liskov, Interface Segregation, Dependency Inversion |
+| **DRY** | Extract common logic; avoid premature abstraction |
+| **KISS** | Prefer straightforward solutions over clever ones |
+| **YAGNI** | Don't build features speculatively |
+
+## Layering Guidelines
+
+- Dependencies flow inward (outer layers depend on inner, never reverse)
+- Domain layer has no external dependencies
+- Infrastructure implements domain interfaces
+- API layer orchestrates, doesn't contain business logic
+
+**See also:** Language-specific implementations in `languages/*/` folders

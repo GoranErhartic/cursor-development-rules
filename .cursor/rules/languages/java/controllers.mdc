@@ -1,0 +1,175 @@
+---
+description: "Spring REST controller conventions - @RestController, ResponseEntity, API design, HTTP methods"
+globs: ["**/*Controller*.java", "**/controller/**/*.java", "**/web/**/*.java"]
+---
+
+# API Controller Conventions
+
+## Controller Setup
+
+```java
+@RestController
+@RequestMapping("/api/users")
+@Validated
+public class UserController {
+    
+    private final UserService userService;
+    
+    public UserController(UserService userService) {
+        this.userService = userService;
+    }
+}
+```
+
+- ALWAYS use `@RestController` annotation
+- Use `@RequestMapping` for base path
+- Add `@Validated` for method-level validation
+- Use constructor injection (no `@Autowired` needed in Spring 4.3+)
+
+## HTTP Methods & Status Codes
+
+| Operation | Method | Success | Error |
+|-----------|--------|---------|-------|
+| Get single | GET | 200 OK / 404 Not Found | — |
+| Get list | GET | 200 OK (empty array if none) | — |
+| Create | POST | 201 Created | 400 Bad Request |
+| Update | PUT | 200 OK / 204 No Content | 404 Not Found |
+| Partial | PATCH | 200 OK | 404 Not Found |
+| Delete | DELETE | 204 No Content | 404 Not Found |
+
+## Return Types
+
+```java
+// Single item
+@GetMapping("/{id}")
+public ResponseEntity<UserDto> getById(@PathVariable UUID id) {
+    return userService.findById(id)
+        .map(ResponseEntity::ok)
+        .orElse(ResponseEntity.notFound().build());
+}
+
+// List
+@GetMapping
+public ResponseEntity<List<UserDto>> getAll() {
+    return ResponseEntity.ok(userService.findAll());
+}
+
+// Created
+@PostMapping
+public ResponseEntity<UserDto> create(@Valid @RequestBody CreateUserRequest request) {
+    var user = userService.create(request);
+    return ResponseEntity
+        .created(URI.create("/api/users/" + user.id()))
+        .body(user);
+}
+
+// No content
+@DeleteMapping("/{id}")
+public ResponseEntity<Void> delete(@PathVariable UUID id) {
+    userService.delete(id);
+    return ResponseEntity.noContent().build();
+}
+```
+
+## Path Variables and Request Parameters
+
+```java
+// Path variable with validation
+@GetMapping("/{id}")
+public ResponseEntity<UserDto> getById(
+    @PathVariable @NotNull UUID id) {
+    // ...
+}
+
+// Query parameters
+@GetMapping
+public ResponseEntity<List<UserDto>> search(
+    @RequestParam(required = false) String email,
+    @RequestParam(defaultValue = "0") int page,
+    @RequestParam(defaultValue = "20") int size) {
+    // ...
+}
+
+// Request body
+@PostMapping
+public ResponseEntity<UserDto> create(
+    @Valid @RequestBody CreateUserRequest request) {
+    // ...
+}
+```
+
+## Pagination
+
+```java
+@GetMapping
+public ResponseEntity<Page<UserDto>> getAll(
+    @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC)
+    Pageable pageable) {
+    return ResponseEntity.ok(userService.findAll(pageable));
+}
+```
+
+## Content Negotiation
+
+```java
+@GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
+public ResponseEntity<UserDto> getUser(@PathVariable UUID id) {
+    // ...
+}
+
+@PostMapping(
+    consumes = MediaType.APPLICATION_JSON_VALUE,
+    produces = MediaType.APPLICATION_JSON_VALUE)
+public ResponseEntity<UserDto> create(@RequestBody CreateUserRequest request) {
+    // ...
+}
+```
+
+## Conventions
+
+- Use `UUID` for IDs with `@PathVariable`
+- Return `ResponseEntity<T>` for type safety and explicit status codes
+- Use `@Valid` for request body validation
+- Use `@RequestParam`, `@PathVariable`, `@RequestBody` explicitly
+- Validate in controller via Bean Validation, business logic in service
+- Return `ProblemDetail` for errors (see `error-handling.mdc`)
+- Use `@PageableDefault` for pagination defaults
+
+## API Versioning
+
+```java
+@RestController
+@RequestMapping("/api/v1/users")
+public class UserV1Controller {
+    // ...
+}
+
+// Or use header versioning
+@RestController
+@RequestMapping(value = "/api/users", headers = "API-Version=1")
+public class UserController {
+    // ...
+}
+```
+
+## OpenAPI Documentation
+
+```java
+@RestController
+@RequestMapping("/api/users")
+@Tag(name = "Users", description = "User management endpoints")
+public class UserController {
+    
+    @Operation(summary = "Get user by ID", description = "Returns a single user")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "User found"),
+        @ApiResponse(responseCode = "404", description = "User not found")
+    })
+    @GetMapping("/{id}")
+    public ResponseEntity<UserDto> getById(@PathVariable UUID id) {
+        // ...
+    }
+}
+```
+
+**See also:** `validation.mdc`, `error-handling.mdc`

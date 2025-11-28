@@ -1,0 +1,94 @@
+---
+description: "Security practices for ASP.NET Core - secrets management, HTTPS, headers, CORS"
+globs: ["**/Program.cs", "**/Startup.cs", "**/appsettings*.json", "**/*Cors*.cs", "**/*Security*.cs"]
+---
+
+# Security Practices
+
+## Critical Rules
+
+- **NEVER expose secrets, API keys, or credentials in code**
+- **NEVER commit secrets to source control**
+- **ALWAYS use HTTPS in production**
+- **ALWAYS validate and sanitize user input**
+
+## Secrets Management
+
+```csharp
+// appsettings.json - NEVER store actual secrets here
+{
+  "ConnectionStrings": {
+    "Database": "" // Set via environment variable or secret manager
+  }
+}
+
+// Program.cs
+builder.Configuration.AddEnvironmentVariables();
+
+// Development only
+if (builder.Environment.IsDevelopment())
+    builder.Configuration.AddUserSecrets<Program>();
+```
+
+Use for production:
+- Azure Key Vault
+- AWS Secrets Manager
+- HashiCorp Vault
+- Environment variables
+
+## Security Headers
+
+```csharp
+app.UseHsts();
+app.UseHttpsRedirection();
+
+// Add security headers middleware
+app.Use(async (context, next) =>
+{
+    context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
+    context.Response.Headers.Append("X-Frame-Options", "DENY");
+    context.Response.Headers.Append("X-XSS-Protection", "1; mode=block");
+    context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
+    await next();
+});
+```
+
+## CORS Configuration
+
+```csharp
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("Production", policy =>
+    {
+        policy.WithOrigins("https://yourdomain.com")
+              .AllowAnyMethod()
+              .AllowAnyHeader()
+              .AllowCredentials();
+    });
+});
+
+// NEVER use AllowAnyOrigin() with AllowCredentials()
+```
+
+## Rate Limiting (.NET 10)
+
+```csharp
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddFixedWindowLimiter("api", limiter =>
+    {
+        limiter.PermitLimit = 100;
+        limiter.Window = TimeSpan.FromMinutes(1);
+    });
+});
+
+app.UseRateLimiter();
+```
+
+## Dependency Security
+
+- Run `dotnet list package --vulnerable` regularly
+- Enable Dependabot or similar for automated scanning
+- Keep packages updated
+
+**See also:** `request-input-sanitization.mdc`, `auth.mdc`

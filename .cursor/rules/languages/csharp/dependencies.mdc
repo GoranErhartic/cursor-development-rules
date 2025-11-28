@@ -1,0 +1,107 @@
+---
+description: "NuGet dependencies - Central Package Management, versioning, security, licensing"
+globs: ["**/*.csproj", "**/Directory.Build.props", "**/Directory.Packages.props", "**/nuget.config"]
+---
+
+# Dependencies & NuGet
+
+## Central Package Management
+
+Use `Directory.Packages.props` in solution root:
+
+```xml
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Core -->
+    <PackageVersion Include="FluentValidation" Version="11.*" />
+    <PackageVersion Include="FluentValidation.DependencyInjectionExtensions" Version="11.*" />
+    <PackageVersion Include="Serilog.AspNetCore" Version="8.*" />
+    <PackageVersion Include="Polly" Version="8.*" />
+    
+    <!-- Data -->
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.*" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Tools" Version="10.*" />
+    
+    <!-- Messaging -->
+    <PackageVersion Include="Rebus" Version="8.*" />
+    <PackageVersion Include="Rebus.ServiceProvider" Version="5.*" />
+    <PackageVersion Include="Rebus.RabbitMq" Version="0.*" />
+    <PackageVersion Include="Rebus.Serilog" Version="6.*" />
+    
+    <!-- Testing -->
+    <PackageVersion Include="xunit" Version="2.*" />
+    <PackageVersion Include="FluentAssertions" Version="6.*" />
+    <PackageVersion Include="Moq" Version="4.*" />
+    <PackageVersion Include="Testcontainers.MsSql" Version="3.*" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.*" />
+  </ItemGroup>
+</Project>
+```
+
+In `.csproj` files, omit version:
+```xml
+<PackageReference Include="FluentValidation" />
+```
+
+## Package Selection Criteria
+
+- **ONLY use free and open-source packages**
+- Acceptable licenses: MIT, Apache 2.0, BSD, LGPL, MPL, or any OSI-approved free license
+- **STOP and ask** before introducing packages with commercial/paid tiers
+- Be cautious with copyleft licenses (GPL, AGPL) — they have viral implications
+- Verify license before adding any new dependency
+- **NEVER use packages that require paid licenses for production use**
+- Favor actively maintained packages with community support
+- Verify security — check for known vulnerabilities
+
+## Security Scanning
+
+```bash
+# Check for vulnerable packages
+dotnet list package --vulnerable
+
+# Check for outdated packages
+dotnet list package --outdated
+```
+
+- Enable Dependabot or similar for automated scanning
+- Review and update dependencies regularly
+- NEVER ignore security advisories
+
+## License Verification
+
+```bash
+# List all package licenses (requires dotnet-project-licenses tool)
+dotnet tool install --global dotnet-project-licenses
+dotnet-project-licenses --input . --output-directory licenses
+
+# Or manually check specific package
+dotnet list package
+# Then verify license on nuget.org for each package
+```
+
+- Verify licenses before adding new dependencies
+- Document any packages with copyleft licenses
+- Review license compatibility with your project's license
+
+## Recommended Packages
+
+| Purpose | Package |
+|---------|---------|
+| Validation | FluentValidation |
+| Logging | Serilog.AspNetCore |
+| ORM | Microsoft.EntityFrameworkCore.* |
+| Messaging | Rebus |
+| Resilience | Polly |
+| Testing | xUnit, FluentAssertions, Moq |
+| Containers | Testcontainers |
+
+## Conventions
+
+- Pin major versions in Directory.Packages.props
+- Use floating versions (`11.*`) for automatic patch updates
+- Document any third-party dependencies with licensing implications
+- NEVER use deprecated or unmaintained packages

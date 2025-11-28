@@ -1,0 +1,78 @@
+---
+description: "Error handling patterns - Result pattern, RFC 7807 (ProblemDetails), global error handling"
+---
+
+# Error Handling Patterns
+
+## Result Pattern Concept
+
+The Result pattern explicitly represents success or failure without throwing exceptions for expected error cases.
+
+### Structure
+- **Success state** - Contains the value
+- **Failure state** - Contains error information
+- **Type safety** - Caller must handle both cases
+
+### When to Use
+- Domain business rule violations (user not found, duplicate email)
+- Validation failures
+- Expected error conditions
+
+### When NOT to Use
+- Unexpected technical failures (database connection lost, disk full)
+- Infrastructure issues (network timeout, missing configuration)
+- Programming errors (null reference, index out of bounds)
+
+## Domain Errors vs Exceptions
+
+| Scenario | Approach | Reason |
+|----------|----------|--------|
+| User not found | Result with error | Expected business scenario |
+| Duplicate email | Result with error | Expected validation failure |
+| Database connection failed | Exception | Unexpected infrastructure failure |
+| Null reference | Exception | Programming error |
+
+## Error Response Format (RFC 7807)
+
+All API error responses should follow RFC 7807 ProblemDetails format:
+
+```json
+{
+  "type": "https://example.com/errors/user-not-found",
+  "title": "User.NotFound",
+  "status": 404,
+  "detail": "User with ID '123' was not found",
+  "instance": "/api/users/123"
+}
+```
+
+### Required Fields
+- `type` - URI identifying the problem type
+- `title` - Short, human-readable summary
+- `status` - HTTP status code
+- `detail` - Specific explanation for this occurrence
+
+## Global Error Handling
+
+Implement centralized error handling at the API boundary:
+
+1. **Validation errors** → 400 Bad Request with field-level details
+2. **Domain errors** → Appropriate status (404, 409, etc.) with ProblemDetails
+3. **Unhandled exceptions** → 500 Internal Server Error (no internal details exposed)
+
+## Logging Conventions
+
+- **Domain errors** - Log at INFO or WARN level (expected scenarios)
+- **Exceptions** - Log at ERROR level with full stack trace
+- **Always include correlation ID** - For request tracing
+- **Never log sensitive data** - Mask passwords, tokens, PII
+
+## Conventions
+
+- NEVER expose stack traces or internal details in production API responses
+- Use Result pattern for domain operations
+- Map domain errors to appropriate HTTP status codes
+- Include correlation IDs in all error logs
+- Provide actionable error messages to clients
+
+**See also:** Language-specific implementations in `languages/*/error-handling.mdc`

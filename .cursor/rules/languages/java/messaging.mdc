@@ -1,0 +1,198 @@
+---
+description: "Spring Cloud Stream messaging patterns - functional bindings, Kafka, RabbitMQ"
+globs: ["**/*Consumer*.java", "**/*Producer*.java", "**/*Event*.java", "**/*Message*.java", "**/messaging/**/*.java"]
+---
+
+# Spring Cloud Stream Messaging
+
+## Dependencies
+
+```xml
+<dependency>
+    <groupId>org.springframework.cloud</groupId>
+    <artifactId>spring-cloud-stream</artifactId>
+</dependency>
+
+<!-- For Kafka -->
+<dependency>
+    <groupId>org.springframework.cloud</groupId>
+    <artifactId>spring-cloud-stream-binder-kafka</artifactId>
+</dependency>
+
+<!-- For RabbitMQ -->
+<dependency>
+    <groupId>org.springframework.cloud</groupId>
+    <artifactId>spring-cloud-stream-binder-rabbit</artifactId>
+</dependency>
+```
+
+## Configuration (application.yml)
+
+```yaml
+spring:
+  cloud:
+    stream:
+      bindings:
+        # Consumer binding
+        userCreated-in-0:
+          destination: user-events
+          group: user-service
+          content-type: application/json
+        
+        # Producer binding
+        userCreated-out-0:
+          destination: user-events
+          content-type: application/json
+      
+      kafka:
+        binder:
+          brokers: localhost:9092
+          auto-create-topics: true
+        bindings:
+          userCreated-in-0:
+            consumer:
+              enable-dlq: true
+              dlq-name: user-events-dlq
+              auto-commit-offset: false
+      
+      rabbit:
+        bindings:
+          userCreated-in-0:
+            consumer:
+              auto-bind-dlq: true
+              republish-to-dlq: true
+```
+
+## Events
+
+```java
+// Event record (past tense)
+public record UserCreatedEvent(
+    UUID userId,
+    String email,
+    LocalDateTime createdAt
+) {}
+
+public record OrderPlacedEvent(
+    UUID orderId,
+    UUID userId,
+    BigDecimal amount,
+    LocalDateTime placedAt
+) {}
+```
+
+## Functional Consumer
+
+```java
+@Configuration
+public class MessageConsumers {
+    
+    private static final Logger log = LoggerFactory.getLogger(MessageConsumers.class);
+    
+    // Simple consumer
+    @Bean
+    public Consumer<UserCreatedEvent> userCreated() {
+        return event -> {
+            log.info("Received UserCreatedEvent: userId={}, email={}", 
+                event.userId(), event.email());
+            // Process the event
+        };
+    }
+    
+    // Consumer with acknowledgment
+    @Bean
+    public Consumer<Message<OrderPlacedEvent>> orderPlaced() {
+        return message -> {
+            try {
+                var event = message.getPayload();
+                log.info("Processing order: {}", event.orderId());
+                
+                // Process order
+                processOrder(event);
+                
+            } catch (Exception e) {
+                log.error("Failed to process order event", e);
+                throw e; // Will retry or send to DLQ based on configuration
+            }
+        };
+    }
+    
+    private void processOrder(OrderPlacedEvent event) {
+        // Implementation
+    }
+}
+```
+
+## Imperative Publishing with StreamBridge
+
+```java
+@Service
+public class UserService {
+    
+    private final StreamBridge streamBridge;
+    private final UserRepository userRepository;
+    
+    public UserService(StreamBridge streamBridge, UserRepository userRepository) {
+        this.streamBridge = streamBridge;
+        this.userRepository = userRepository;
+    }
+    
+    @Transactional
+    public UUID createUser(CreateUserRequest request) {
+        var user = new User();
+        user.setEmail(request.email());
+        user.setName(request.name());
+        
+        var saved = userRepository.save(user);
+        
+        // Publish event after persisting
+        var event = new UserCreatedEvent(
+            saved.getId(),
+            saved.getEmail(),
+            LocalDateTime.now()
+        );
+        
+        streamBridge.send("userCreated-out-0", event);
+        
+        return saved.getId();
+    }
+}
+```
+
+## Error Handling & DLQ
+
+```java
+@Configuration
+public class DlqConsumers {
+    
+    private static final Logger log = LoggerFactory.getLogger(DlqConsumers.class);
+    
+    @Bean
+    public Consumer<Message<UserCreatedEvent>> userCreatedDlq() {
+        return message -> {
+            var event = message.getPayload();
+            var headers = message.getHeaders();
+            
+            log.error("Message sent to DLQ: userId={}, exception={}", 
+                event.userId(),
+                headers.get("x-exception-message"));
+            
+            // Store in database for manual processing
+            // Send alert to operations team
+        };
+    }
+}
+```
+
+## Conventions
+
+- Use past tense for event names (`UserCreated`, not `CreateUser`)
+- Events are immutable (use `record`)
+- Consumers must be idempotent (handle duplicate messages)
+- Use `StreamBridge` for imperative publishing
+- Use functional style (`Consumer<T>`, `Function<T, R>`) for reactive streams
+- Configure DLQ for all consumers
+- Include correlation IDs in message headers
+- NEVER block in consumers (use async processing if needed)
+
+**See also:** `../../patterns/architecture.mdc`, `error-handling.mdc`, `cqrs.mdc`

@@ -1,0 +1,357 @@
+---
+description: "CQRS pattern for Spring Boot - commands, queries, handlers, events"
+globs: ["**/*Command*.java", "**/*Query*.java", "**/*Handler*.java", "**/*Event*.java"]
+---
+
+# CQRS Pattern for Spring Boot
+
+## Core Interfaces
+
+```java
+// Marker interface for commands
+public interface Command<T> {}
+
+// Marker interface for queries
+public interface Query<T> {}
+
+// Command handler
+public interface CommandHandler<C extends Command<T>, T> {
+    T handle(C command);
+}
+
+// Query handler
+public interface QueryHandler<Q extends Query<T>, T> {
+    T handle(Q query);
+}
+```
+
+## Command Pattern
+
+```java
+// Command (using record)
+public record CreateUserCommand(
+    String email,
+    String name
+) implements Command<Result<UUID>> {}
+
+// Handler
+@Service
+@Transactional
+public class CreateUserCommandHandler implements CommandHandler<CreateUserCommand, Result<UUID>> {
+    
+    private final UserRepository userRepository;
+    private final ApplicationEventPublisher eventPublisher;
+    
+    public CreateUserCommandHandler(
+            UserRepository userRepository,
+            ApplicationEventPublisher eventPublisher) {
+        this.userRepository = userRepository;
+        this.eventPublisher = eventPublisher;
+    }
+    
+    @Override
+    public Result<UUID> handle(CreateUserCommand command) {
+        // Check business rules
+        if (userRepository.existsByEmail(command.email())) {
+            return Result.failure(UserErrors.EMAIL_ALREADY_EXISTS);
+        }
+        
+        // Create entity
+        var user = new User();
+        user.setEmail(command.email());
+        user.setName(command.name());
+        
+        // Persist
+        var saved = userRepository.save(user);
+        
+        // Publish domain event
+        eventPublisher.publishEvent(new UserCreatedEvent(
+            saved.getId(),
+            saved.getEmail(),
+            LocalDateTime.now()
+        ));
+        
+        return Result.success(saved.getId());
+    }
+}
+```
+
+## Query Pattern
+
+```java
+// Query
+public record GetUserQuery(UUID id) implements Query<Result<UserDto>> {}
+
+// Handler
+@Service
+@Transactional(readOnly = true)
+public class GetUserQueryHandler implements QueryHandler<GetUserQuery, Result<UserDto>> {
+    
+    private final UserRepository userRepository;
+    
+    public GetUserQueryHandler(UserRepository userRepository) {
+        this.userRepository = userRepository;
+    }
+    
+    @Override
+    public Result<UserDto> handle(GetUserQuery query) {
+        return userRepository.findById(query.id())
+            .map(user -> new UserDto(user.getId(), user.getEmail(), user.getName()))
+            .map(Result::<UserDto>success)
+            .orElse(Result.failure(UserErrors.NOT_FOUND));
+    }
+}
+```
+
+## Dispatcher (Simple Mediator)
+
+```java
+public interface Dispatcher {
+    <T> T dispatch(Command<T> command);
+    <T> T dispatch(Query<T> query);
+}
+
+@Service
+public class SimpleDispatcher implements Dispatcher {
+    
+    private final ApplicationContext context;
+    
+    public SimpleDispatcher(ApplicationContext context) {
+        this.context = context;
+    }
+    
+    @Override
+    @SuppressWarnings("unchecked")
+    public <T> T dispatch(Command<T> command) {
+        var handlerType = getHandlerType(CommandHandler.class, command.getClass());
+        var handler = (CommandHandler<Command<T>, T>) context.getBean(handlerType);
+        return handler.handle(command);
+    }
+    
+    @Override
+    @SuppressWarnings("unchecked")
+    public <T> T dispatch(Query<T> query) {
+        var handlerType = getHandlerType(QueryHandler.class, query.getClass());
+        var handler = (QueryHandler<Query<T>, T>) context.getBean(handlerType);
+        return handler.handle(query);
+    }
+    
+    private Class<?> getHandlerType(Class<?> handlerInterface, Class<?> messageType) {
+        return context.getBeansOfType(handlerInterface).values().stream()
+            .map(Object::getClass)
+            .filter(type -> {
+                var genericInterface = Arrays.stream(type.getGenericInterfaces())
+                    .filter(i -> i instanceof ParameterizedType)
+                    .map(i -> (ParameterizedType) i)
+                    .filter(i -> handlerInterface.isAssignableFrom((Class<?>) i.getRawType()))
+                    .findFirst()
+                    .orElse(null);
+                    
+                if (genericInterface == null) return false;
+                
+                var messageClass = (Class<?>) genericInterface.getActualTypeArguments()[0];
+                return messageClass.equals(messageType);
+            })
+            .findFirst()
+            .orElseThrow(() -> new IllegalStateException(
+                "No handler found for " + messageType.getSimpleName()));
+    }
+}
+```
+
+## Controller Integration
+
+```java
+@RestController
+@RequestMapping("/api/users")
+public class UserController {
+    
+    private final Dispatcher dispatcher;
+    
+    public UserController(Dispatcher dispatcher) {
+        this.dispatcher = dispatcher;
+    }
+    
+    @PostMapping
+    public ResponseEntity<UserDto> create(@Valid @RequestBody CreateUserRequest request) {
+        var command = new CreateUserCommand(request.email(), request.name());
+        var result = dispatcher.dispatch(command);
+        
+        return result.match(
+            id -> {
+                var query = new GetUserQuery(id);
+                var userResult = dispatcher.dispatch(query);
+                return userResult.match(
+                    user -> ResponseEntity
+                        .created(URI.create("/api/users/" + id))
+                        .body(user),
+                    error -> ResponseEntity.badRequest().build()
+                );
+            },
+            error -> ResponseEntity.badRequest().build()
+        );
+    }
+    
+    @GetMapping("/{id}")
+    public ResponseEntity<UserDto> getById(@PathVariable UUID id) {
+        var query = new GetUserQuery(id);
+        var result = dispatcher.dispatch(query);
+        
+        return result.match(
+            ResponseEntity::ok,
+            error -> ResponseEntity.notFound().build()
+        );
+    }
+}
+```
+
+## Domain Events
+
+```java
+// Event (past tense)
+public record UserCreatedEvent(
+    UUID userId,
+    String email,
+    LocalDateTime createdAt
+) {}
+
+// Event listener
+@Component
+public class UserEventListener {
+    
+    private static final Logger log = LoggerFactory.getLogger(UserEventListener.class);
+    
+    @EventListener
+    @Async
+    public void onUserCreated(UserCreatedEvent event) {
+        log.info("User created: userId={}, email={}", event.userId(), event.email());
+        
+        // Send welcome email, create profile, etc.
+    }
+}
+
+// Enable async event processing
+@Configuration
+@EnableAsync
+public class AsyncConfig {
+    
+    @Bean
+    public Executor taskExecutor() {
+        var executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(5);
+        executor.setQueueCapacity(100);
+        executor.setThreadNamePrefix("async-event-");
+        executor.initialize();
+        return executor;
+    }
+}
+```
+
+## Transaction Events
+
+```java
+@Component
+public class UserEventListener {
+    
+    // Execute after successful commit
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onUserCreatedAfterCommit(UserCreatedEvent event) {
+        // This runs only if transaction commits successfully
+        // Safe to call external services here
+    }
+    
+    // Execute before commit
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onUserCreatedBeforeCommit(UserCreatedEvent event) {
+        // Still within transaction
+        // Can still roll back if needed
+    }
+    
+    // Execute after rollback
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_ROLLBACK)
+    public void onUserCreatedAfterRollback(UserCreatedEvent event) {
+        // Compensation logic
+    }
+}
+```
+
+## Validation Pipeline
+
+```java
+// Validator interface
+public interface CommandValidator<C extends Command<?>> {
+    void validate(C command);
+}
+
+// Implementation
+@Component
+public class CreateUserCommandValidator implements CommandValidator<CreateUserCommand> {
+    
+    @Override
+    public void validate(CreateUserCommand command) {
+        var violations = new ArrayList<String>();
+        
+        if (command.email() == null || command.email().isBlank()) {
+            violations.add("Email is required");
+        }
+        
+        if (command.name() == null || command.name().isBlank()) {
+            violations.add("Name is required");
+        }
+        
+        if (!violations.isEmpty()) {
+            throw new ValidationException(String.join(", ", violations));
+        }
+    }
+}
+
+// Enhanced dispatcher with validation
+@Service
+public class ValidatingDispatcher implements Dispatcher {
+    
+    private final ApplicationContext context;
+    
+    public ValidatingDispatcher(ApplicationContext context) {
+        this.context = context;
+    }
+    
+    @Override
+    public <T> T dispatch(Command<T> command) {
+        // Validate before handling
+        validateCommand(command);
+        
+        var handlerType = getHandlerType(CommandHandler.class, command.getClass());
+        var handler = (CommandHandler<Command<T>, T>) context.getBean(handlerType);
+        return handler.handle(command);
+    }
+    
+    private void validateCommand(Command<?> command) {
+        var validators = context.getBeansOfType(CommandValidator.class).values();
+        validators.stream()
+            .filter(v -> supportsCommand(v, command))
+            .forEach(v -> ((CommandValidator) v).validate(command));
+    }
+    
+    private boolean supportsCommand(CommandValidator<?> validator, Command<?> command) {
+        var validatorType = validator.getClass().getGenericInterfaces();
+        // Implementation to check if validator supports command type
+        return true; // Simplified
+    }
+    
+    // ... query dispatch and helper methods
+}
+```
+
+## Conventions
+
+- Commands MUST return `Result<T>` (with value) or `Result` (without value)
+- Queries MUST return `Result<T>` with DTOs
+- Use records for commands, queries, and events
+- ONE handler per command/query
+- Handlers are Spring `@Service` components
+- Commands use `@Transactional`, queries use `@Transactional(readOnly = true)`
+- Events use past tense naming (`UserCreated`, not `CreateUser`)
+- Use `@TransactionalEventListener` for events that need transaction awareness
+
+**See also:** `error-handling.mdc`, `jpa.mdc`, `spring-cloud-stream.mdc`

@@ -1,0 +1,270 @@
+---
+description: "Rebus messaging patterns - handlers, sagas, outbox, retry policies"
+globs: ["**/*Handler*.cs", "**/*Saga*.cs", "**/Handlers/**/*.cs", "**/Events/**/*.cs", "**/Messages/**/*.cs"]
+---
+
+# Rebus Messaging
+
+> **Note:** Rebus is a free, open-source alternative to MassTransit (which became commercial in v9).
+
+## Required Packages
+
+```bash
+dotnet add package Rebus
+dotnet add package Rebus.ServiceProvider
+dotnet add package Rebus.RabbitMq          # or Rebus.AzureServiceBus, Rebus.SqlServer
+dotnet add package Rebus.Serilog           # for structured logging
+```
+
+## Setup
+
+```csharp
+builder.Services.AddRebus((configure, provider) => configure
+    .Logging(l => l.Serilog())
+    .Transport(t => t.UseRabbitMq(
+        builder.Configuration.GetConnectionString("RabbitMq")!,
+        "my-service-queue"))
+    .Options(o =>
+    {
+        o.SetNumberOfWorkers(1);
+        o.SetMaxParallelism(16);
+        o.RetryStrategy(maxDeliveryAttempts: 5, errorQueueName: "my-service-error");
+    })
+    .Sagas(s => s.StoreInSqlServer(
+        builder.Configuration.GetConnectionString("SqlServer")!,
+        "Sagas", "SagaIndex"))
+);
+
+// Auto-register all handlers from assembly
+builder.Services.AutoRegisterHandlersFromAssemblyOf<Program>();
+```
+
+## Events & Commands
+
+```csharp
+// Event - something that happened (past tense)
+public sealed record UserCreatedEvent(Guid UserId, string Email, DateTime CreatedAt);
+
+// Command - request to do something (imperative)
+public sealed record SendWelcomeEmailCommand(Guid UserId, string Email);
+```
+
+## Handler Pattern
+
+```csharp
+public sealed class UserCreatedEventHandler : IHandleMessages<UserCreatedEvent>
+{
+    private readonly ILogger<UserCreatedEventHandler> _logger;
+
+    public UserCreatedEventHandler(ILogger<UserCreatedEventHandler> logger)
+        => _logger = logger;
+
+    public async Task Handle(UserCreatedEvent message)
+    {
+        _logger.LogInformation("Processing UserCreated event for {UserId}", message.UserId);
+
+        // Process the event
+        await Task.CompletedTask;
+    }
+}
+```
+
+## Publishing Events
+
+```csharp
+public sealed class CreateUserCommandHandler : IRequestHandler<CreateUserCommand, Result<Guid>>
+{
+    private readonly IBus _bus;
+    private readonly IUserRepository _userRepository;
+    private readonly IUnitOfWork _unitOfWork;
+
+    public CreateUserCommandHandler(IBus bus, IUserRepository userRepository, IUnitOfWork unitOfWork)
+    {
+        _bus = bus;
+        _userRepository = userRepository;
+        _unitOfWork = unitOfWork;
+    }
+
+    public async Task<Result<Guid>> Handle(CreateUserCommand request, CancellationToken ct)
+    {
+        var user = User.Create(request.Email, request.Name);
+        _userRepository.Add(user);
+        
+        await _unitOfWork.SaveChangesAsync(ct);
+        
+        // Publish event after commit
+        await _bus.Publish(new UserCreatedEvent(user.Id, user.Email, DateTime.UtcNow));
+        
+        return Result.Success(user.Id);
+    }
+}
+```
+
+## Sending Commands (Point-to-Point)
+
+```csharp
+// Send to specific queue (one receiver)
+await _bus.Send(new SendWelcomeEmailCommand(userId, email));
+
+// Route commands via endpoint mappings
+builder.Services.AddRebus((configure, provider) => configure
+    .Routing(r => r.TypeBased()
+        .Map<SendWelcomeEmailCommand>("email-service-queue"))
+    // ... other config
+);
+```
+
+## Saga Pattern
+
+```csharp
+// Saga data - must implement ISagaData
+public sealed class OrderSagaData : ISagaData
+{
+    public Guid Id { get; set; }
+    public int Revision { get; set; }
+    
+    public Guid OrderId { get; set; }
+    public string CurrentState { get; set; } = "New";
+    public decimal Amount { get; set; }
+}
+
+// Saga handler
+public sealed class OrderSaga : Saga<OrderSagaData>,
+    IAmInitiatedBy<OrderSubmittedEvent>,
+    IHandleMessages<PaymentCompletedEvent>,
+    IHandleMessages<PaymentFailedEvent>
+{
+    private readonly IBus _bus;
+    private readonly ILogger<OrderSaga> _logger;
+
+    public OrderSaga(IBus bus, ILogger<OrderSaga> logger)
+    {
+        _bus = bus;
+        _logger = logger;
+    }
+
+    protected override void CorrelateMessages(ICorrelationConfig<OrderSagaData> config)
+    {
+        config.Correlate<OrderSubmittedEvent>(m => m.OrderId, d => d.OrderId);
+        config.Correlate<PaymentCompletedEvent>(m => m.OrderId, d => d.OrderId);
+        config.Correlate<PaymentFailedEvent>(m => m.OrderId, d => d.OrderId);
+    }
+
+    public async Task Handle(OrderSubmittedEvent message)
+    {
+        Data.OrderId = message.OrderId;
+        Data.Amount = message.Amount;
+        Data.CurrentState = "AwaitingPayment";
+        
+        _logger.LogInformation("Order {OrderId} submitted, awaiting payment", message.OrderId);
+        
+        await _bus.Send(new ProcessPaymentCommand(message.OrderId, message.Amount));
+    }
+
+    public async Task Handle(PaymentCompletedEvent message)
+    {
+        Data.CurrentState = "Completed";
+        _logger.LogInformation("Order {OrderId} payment completed", message.OrderId);
+        
+        await _bus.Publish(new OrderCompletedEvent(Data.OrderId));
+        MarkAsComplete();
+    }
+
+    public Task Handle(PaymentFailedEvent message)
+    {
+        Data.CurrentState = "PaymentFailed";
+        _logger.LogWarning("Order {OrderId} payment failed: {Reason}", message.OrderId, message.Reason);
+        
+        MarkAsComplete();
+        return Task.CompletedTask;
+    }
+}
+```
+
+## Outbox Pattern (Transactional Messaging)
+
+```csharp
+// Use SQL Server transport for built-in transactional support
+builder.Services.AddRebus((configure, provider) => configure
+    .Transport(t => t.UseSqlServer(
+        new SqlServerTransportOptions(connectionString),
+        "my-service-queue"))
+    .Outbox(o => o.StoreInSqlServer(connectionString, "RebusOutbox"))
+);
+
+// Or with Entity Framework scope
+public async Task Handle(CreateUserCommand request, CancellationToken ct)
+{
+    using var scope = new RebusTransactionScope();
+    
+    var user = User.Create(request.Email);
+    _userRepository.Add(user);
+    
+    await _bus.Publish(new UserCreatedEvent(user.Id, user.Email, DateTime.UtcNow));
+    
+    await _unitOfWork.SaveChangesAsync(ct);
+    await scope.CompleteAsync();
+}
+```
+
+## Deferred Messages (Scheduling)
+
+```csharp
+// Defer message delivery
+await _bus.Defer(TimeSpan.FromMinutes(30), new ReminderMessage(orderId));
+
+// Defer to specific time
+await _bus.Defer(DateTime.UtcNow.AddHours(24), new DailyReportCommand());
+```
+
+## Second-Level Retries
+
+```csharp
+builder.Services.AddRebus((configure, provider) => configure
+    .Options(o =>
+    {
+        o.RetryStrategy(
+            maxDeliveryAttempts: 3,
+            secondLevelRetriesEnabled: true,
+            errorQueueName: "my-service-error");
+    })
+);
+
+// Handle second-level retries explicitly
+public sealed class FailingHandler : IHandleMessages<SomeMessage>, IHandleMessages<IFailed<SomeMessage>>
+{
+    public Task Handle(SomeMessage message)
+    {
+        throw new Exception("Transient failure");
+    }
+
+    public async Task Handle(IFailed<SomeMessage> message)
+    {
+        _logger.LogWarning("Message failed: {Error}", message.ErrorDescription);
+        
+        // Retry after delay
+        await _bus.Defer(TimeSpan.FromMinutes(5), message.Message);
+    }
+}
+```
+
+## Conventions
+
+- Use past tense for events (`UserCreated`, not `CreateUser`)
+- One handler per message type (unless handling failures)
+- Always configure retry policies and error queues
+- Handlers must be idempotent (handle duplicate messages)
+- Use `IBus.Publish()` for events (pub/sub), `IBus.Send()` for commands (point-to-point)
+- Prefer saga pattern for long-running workflows over orchestrating in handlers
+
+## Migration from MassTransit
+
+| MassTransit | Rebus |
+|-------------|-------|
+| `IConsumer<T>` | `IHandleMessages<T>` |
+| `ConsumeContext<T>` | Message passed directly to `Handle(T)` |
+| `IPublishEndpoint` | `IBus` |
+| `MassTransitStateMachine<T>` | `Saga<T>` + `IAmInitiatedBy<T>` |
+| `x.UsingRabbitMq()` | `t.UseRabbitMq()` |
+
+**See also:** `../../patterns/architecture.mdc`, `error-handling.mdc`, `resilience.mdc`

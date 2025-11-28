@@ -1,0 +1,397 @@
+---
+description: "Spring Data JPA patterns - repositories, entities, transactions, query optimization"
+globs: ["**/*Entity*.java", "**/*Repository*.java", "**/entity/**/*.java", "**/repository/**/*.java"]
+---
+
+# Spring Data JPA Patterns
+
+## Entity Definition
+
+```java
+@Entity
+@Table(name = "users", indexes = {
+    @Index(name = "idx_user_email", columnList = "email", unique = true)
+})
+public class User {
+    
+    @Id
+    @GeneratedValue(strategy = GenerationType.UUID)
+    private UUID id;
+    
+    @Column(nullable = false, unique = true, length = 256)
+    private String email;
+    
+    @Column(nullable = false, length = 100)
+    private String name;
+    
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private LocalDateTime createdAt;
+    
+    @Column(name = "updated_at")
+    private LocalDateTime updatedAt;
+    
+    @Version
+    private Long version; // Optimistic locking
+    
+    @PrePersist
+    protected void onCreate() {
+        createdAt = LocalDateTime.now();
+        updatedAt = LocalDateTime.now();
+    }
+    
+    @PreUpdate
+    protected void onUpdate() {
+        updatedAt = LocalDateTime.now();
+    }
+    
+    // Getters, setters, or use Lombok
+}
+```
+
+## Repository Pattern
+
+```java
+public interface UserRepository extends JpaRepository<User, UUID> {
+    
+    // Query method
+    Optional<User> findByEmail(String email);
+    
+    // Derived query
+    List<User> findByNameContainingIgnoreCase(String name);
+    
+    // Custom query with JPQL
+    @Query("SELECT u FROM User u WHERE u.email = :email AND u.active = true")
+    Optional<User> findActiveUserByEmail(@Param("email") String email);
+    
+    // Native query
+    @Query(value = "SELECT * FROM users WHERE email = :email", nativeQuery = true)
+    Optional<User> findByEmailNative(@Param("email") String email);
+    
+    // Exists check
+    boolean existsByEmail(String email);
+    
+    // Count
+    @Query("SELECT COUNT(u) FROM User u WHERE u.active = true")
+    long countActiveUsers();
+    
+    // Modifying query
+    @Modifying
+    @Query("UPDATE User u SET u.active = false WHERE u.lastLogin < :date")
+    int deactivateInactiveUsers(@Param("date") LocalDateTime date);
+}
+```
+
+## Query Best Practices
+
+| Scenario | Approach |
+|----------|----------|
+| Read-only queries | Use `@Transactional(readOnly = true)` |
+| Single item | `.findById()` or query method |
+| Exists check | `.existsById()` or custom exists method |
+| Count | `.count()` or custom count query |
+| Projections | Use DTOs with constructor expression or interface projections |
+| Pagination | Use `Pageable` parameter |
+| Fetch joins | Use `@Query` with `JOIN FETCH` |
+
+## Projections
+
+```java
+// Interface projection
+public interface UserSummary {
+    UUID getId();
+    String getEmail();
+    String getName();
+}
+
+// Repository method
+List<UserSummary> findAllProjectedBy();
+
+// DTO projection with constructor expression
+@Query("""
+    SELECT new com.example.dto.UserDto(u.id, u.email, u.name)
+    FROM User u
+    WHERE u.active = true
+    """)
+List<UserDto> findAllActiveDtos();
+
+// Record-based DTO
+public record UserDto(UUID id, String email, String name) {}
+```
+
+## Relationships
+
+```java
+@Entity
+@Table(name = "orders")
+public class Order {
+    
+    @Id
+    @GeneratedValue(strategy = GenerationType.UUID)
+    private UUID id;
+    
+    // Many-to-One (always LAZY)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id", nullable = false)
+    private User user;
+    
+    // One-to-Many (always LAZY)
+    @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<OrderItem> items = new ArrayList<>();
+    
+    // Helper method for bidirectional relationship
+    public void addItem(OrderItem item) {
+        items.add(item);
+        item.setOrder(this);
+    }
+}
+
+// Fetch with JOIN FETCH to avoid N+1
+@Query("SELECT o FROM Order o JOIN FETCH o.items WHERE o.id = :id")
+Optional<Order> findByIdWithItems(@Param("id") UUID id);
+```
+
+## Anti-Patterns to Avoid
+
+- NEVER use `FetchType.EAGER` (causes N+1 and loads unnecessary data)
+- NEVER call repository methods in loops (N+1 problem)
+- NEVER use `findAll()` without pagination
+- NEVER load full entities for read-only projections
+- NEVER use `CascadeType.ALL` without understanding implications
+- NEVER rely on default fetch mode for relationships
+
+## Pagination and Sorting
+
+```java
+public interface UserRepository extends JpaRepository<User, UUID> {
+    
+    Page<User> findByNameContaining(String name, Pageable pageable);
+    
+    Slice<User> findByActive(boolean active, Pageable pageable);
+}
+
+// Usage in service
+public Page<UserDto> findUsers(String name, int page, int size) {
+    Pageable pageable = PageRequest.of(page, size, Sort.by("createdAt").descending());
+    return userRepository.findByNameContaining(name, pageable)
+        .map(user -> new UserDto(user.getId(), user.getEmail(), user.getName()));
+}
+```
+
+## Specifications (Dynamic Queries)
+
+```java
+public class UserSpecifications {
+    
+    public static Specification<User> hasEmail(String email) {
+        return (root, query, cb) -> 
+            email == null ? null : cb.equal(root.get("email"), email);
+    }
+    
+    public static Specification<User> isActive() {
+        return (root, query, cb) -> cb.equal(root.get("active"), true);
+    }
+    
+    public static Specification<User> createdAfter(LocalDateTime date) {
+        return (root, query, cb) ->
+            date == null ? null : cb.greaterThan(root.get("createdAt"), date);
+    }
+}
+
+// Repository
+public interface UserRepository extends JpaRepository<User, UUID>, JpaSpecificationExecutor<User> {
+}
+
+// Usage
+Specification<User> spec = Specification
+    .where(UserSpecifications.isActive())
+    .and(UserSpecifications.hasEmail(email))
+    .and(UserSpecifications.createdAfter(date));
+
+List<User> users = userRepository.findAll(spec);
+```
+
+## Transactions
+
+```java
+@Service
+@Transactional(readOnly = true) // Default for all methods
+public class UserService {
+    
+    private final UserRepository userRepository;
+    
+    public UserService(UserRepository userRepository) {
+        this.userRepository = userRepository;
+    }
+    
+    // Read-only (uses class-level annotation)
+    public Optional<UserDto> findById(UUID id) {
+        return userRepository.findById(id)
+            .map(user -> new UserDto(user.getId(), user.getEmail(), user.getName()));
+    }
+    
+    // Write operation (override with readOnly = false)
+    @Transactional
+    public UserDto create(CreateUserRequest request) {
+        var user = new User();
+        user.setEmail(request.email());
+        user.setName(request.name());
+        
+        var saved = userRepository.save(user);
+        return new UserDto(saved.getId(), saved.getEmail(), saved.getName());
+    }
+    
+    // Multiple operations in single transaction
+    @Transactional
+    public void transferOwnership(UUID fromUserId, UUID toUserId) {
+        var fromUser = userRepository.findById(fromUserId)
+            .orElseThrow(() -> new EntityNotFoundException("User not found"));
+        var toUser = userRepository.findById(toUserId)
+            .orElseThrow(() -> new EntityNotFoundException("User not found"));
+        
+        // Both operations in same transaction
+        fromUser.setActive(false);
+        toUser.setActive(true);
+        
+        userRepository.save(fromUser);
+        userRepository.save(toUser);
+    }
+}
+```
+
+## Transaction Isolation
+
+```java
+// For critical operations requiring strong isolation
+@Transactional(isolation = Isolation.SERIALIZABLE)
+public void criticalOperation() {
+    // ...
+}
+
+// For operations that can tolerate some inconsistency
+@Transactional(isolation = Isolation.READ_COMMITTED)
+public void standardOperation() {
+    // ...
+}
+```
+
+## EntityManager for Complex Operations
+
+```java
+@Service
+@Transactional(readOnly = true)
+public class UserQueryService {
+    
+    private final EntityManager entityManager;
+    
+    public UserQueryService(EntityManager entityManager) {
+        this.entityManager = entityManager;
+    }
+    
+    public List<UserDto> findUsersByComplexCriteria(SearchCriteria criteria) {
+        var cb = entityManager.getCriteriaBuilder();
+        var query = cb.createQuery(UserDto.class);
+        var root = query.from(User.class);
+        
+        var predicates = new ArrayList<Predicate>();
+        
+        if (criteria.email() != null) {
+            predicates.add(cb.equal(root.get("email"), criteria.email()));
+        }
+        
+        if (criteria.createdAfter() != null) {
+            predicates.add(cb.greaterThan(root.get("createdAt"), criteria.createdAfter()));
+        }
+        
+        query.select(cb.construct(UserDto.class,
+            root.get("id"),
+            root.get("email"),
+            root.get("name")
+        )).where(predicates.toArray(new Predicate[0]));
+        
+        return entityManager.createQuery(query).getResultList();
+    }
+}
+```
+
+## Auditing
+
+```java
+@Configuration
+@EnableJpaAuditing
+public class JpaConfig {
+    
+    @Bean
+    public AuditorAware<String> auditorProvider() {
+        return () -> Optional.ofNullable(SecurityContextHolder.getContext())
+            .map(SecurityContext::getAuthentication)
+            .filter(Authentication::isAuthenticated)
+            .map(Authentication::getName);
+    }
+}
+
+@MappedSuperclass
+@EntityListeners(AuditingEntityListener.class)
+public abstract class AuditableEntity {
+    
+    @CreatedDate
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private LocalDateTime createdAt;
+    
+    @LastModifiedDate
+    @Column(name = "updated_at")
+    private LocalDateTime updatedAt;
+    
+    @CreatedBy
+    @Column(name = "created_by", updatable = false)
+    private String createdBy;
+    
+    @LastModifiedBy
+    @Column(name = "updated_by")
+    private String updatedBy;
+}
+```
+
+## Optimistic Locking
+
+```java
+@Entity
+public class User {
+    
+    @Id
+    @GeneratedValue(strategy = GenerationType.UUID)
+    private UUID id;
+    
+    @Version
+    private Long version; // Automatically managed by JPA
+    
+    // ... other fields
+}
+
+// Handle OptimisticLockException
+@Transactional
+public void updateUser(UUID id, UpdateUserRequest request) {
+    try {
+        var user = userRepository.findById(id)
+            .orElseThrow(() -> new EntityNotFoundException("User not found"));
+        
+        user.setName(request.name());
+        userRepository.save(user);
+        
+    } catch (OptimisticLockingFailureException e) {
+        throw new ConcurrentModificationException("User was modified by another transaction");
+    }
+}
+```
+
+## Conventions
+
+- ALWAYS use `@Transactional(readOnly = true)` for read operations
+- ALWAYS use UUID for IDs
+- NEVER use `FetchType.EAGER`
+- Use projections (DTOs) for read operations, not full entities
+- Use `@Query` with JOIN FETCH for associations you need
+- ALWAYS add indexes on frequently queried columns
+- Use `@Version` for optimistic locking on entities that can be updated concurrently
+- Repository methods should return domain entities; service layer converts to DTOs
+
+**See also:** `architecture.mdc`, `cqrs.mdc`

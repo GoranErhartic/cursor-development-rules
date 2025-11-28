@@ -1,0 +1,39 @@
+---
+description: "Workflow for implementing code changes - checklists and patterns"
+---
+
+# Code Implementation Workflow
+
+When implementing features, refactoring code, or fixing bugs, you must adhere to the following workflow and checklists.
+
+## Workflow Steps
+
+### 1. Pre-Work
+Before writing code:
+- Clarify any ambiguous requirements.
+- Identify existing patterns in the codebase to replicate.
+- Verify required dependencies are available.
+
+### 2. Implementation (TDD Cycle)
+- **Write failing test first** that defines the expected behavior
+- **Implement minimum code** to make the test pass
+- **Refactor** while tests remain green
+- Repeat for each behavior unit
+
+> **Exception:** Trivial changes (config, formatting, single-line fixes) may skip TDD with documented justification.
+
+### 3. Verification (Definition of Done)
+Before marking the task as complete, ensure:
+- [ ] Project builds successfully
+- [ ] All tests pass
+- [ ] No secrets exposed
+- [ ] Input sanitization at boundaries
+- [ ] Follows existing patterns
+- [ ] Error handling implemented
+
+## Summary Requirement
+Every implementation task must conclude with a summary in the following format:
+1. **What changed**
+2. **Why**
+3. **How to verify**
+4. **Limitations**

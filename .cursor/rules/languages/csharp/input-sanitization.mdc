@@ -1,0 +1,104 @@
+---
+description: "Input validation and sanitization rules - SQL injection, XSS, path traversal prevention"
+globs: ["**/*Controller*.cs", "**/*Handler*.cs", "**/*Validator*.cs"]
+---
+
+# Input Sanitization
+
+> **All external input is untrusted.** Sanitize at system boundaries.
+
+## Validation vs Sanitization
+
+| Concept | Purpose | Example |
+|---------|---------|---------|
+| **Validation** | Reject invalid input | Email must match pattern |
+| **Sanitization** | Transform to safe form | Strip HTML tags, escape chars |
+
+## String Inputs
+
+```csharp
+public static class StringSanitizer
+{
+    public static string Sanitize(string? input, int maxLength = 1000)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+            return string.Empty;
+
+        return input
+            .Trim()
+            .Normalize(NormalizationForm.FormC)
+            .Truncate(maxLength);
+    }
+}
+```
+
+Rules:
+- Trim whitespace
+- Normalize Unicode (NFC)
+- Enforce maximum length
+- Remove control characters
+- Use allowlist of permitted characters when possible
+
+## SQL Injection Prevention
+
+```csharp
+// CORRECT - Parameterized query
+var user = await context.Users
+    .FirstOrDefaultAsync(u => u.Email == email, ct);
+
+// CORRECT - Raw SQL with parameters
+var users = await context.Users
+    .FromSqlInterpolated($"SELECT * FROM Users WHERE Email = {email}")
+    .ToListAsync(ct);
+
+// NEVER - String concatenation
+var users = await context.Users
+    .FromSqlRaw($"SELECT * FROM Users WHERE Email = '{email}'") // VULNERABLE!
+    .ToListAsync(ct);
+```
+
+## Path Traversal Prevention
+
+```csharp
+public static string SanitizeFileName(string fileName)
+{
+    var sanitized = Path.GetFileName(fileName); // Strips directory components
+    var invalid = Path.GetInvalidFileNameChars();
+    return new string(sanitized.Where(c => !invalid.Contains(c)).ToArray());
+}
+
+// Validate path is within allowed directory
+public static bool IsPathSafe(string basePath, string requestedPath)
+{
+    var fullPath = Path.GetFullPath(Path.Combine(basePath, requestedPath));
+    return fullPath.StartsWith(Path.GetFullPath(basePath), StringComparison.OrdinalIgnoreCase);
+}
+```
+
+## HTML/XSS Prevention
+
+- Use Razor encoding (automatic in ASP.NET Core views)
+- For APIs returning HTML, use `HtmlEncoder.Default.Encode()`
+- NEVER return raw user input in responses
+
+## URL Validation
+
+```csharp
+public static bool IsValidUrl(string url, params string[] allowedSchemes)
+{
+    if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        return false;
+
+    var schemes = allowedSchemes.Length > 0 ? allowedSchemes : new[] { "https" };
+    return schemes.Contains(uri.Scheme, StringComparer.OrdinalIgnoreCase);
+}
+```
+
+## Common Pitfalls
+
+- ❌ Client-side validation only (always validate server-side)
+- ❌ Blocklisting bad patterns (use allowlists)
+- ❌ Single sanitization for all contexts
+- ❌ Trusting data from your own database (stored XSS)
+
+**See also:** `security.mdc`, `request-validation.mdc`

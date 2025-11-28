@@ -1,0 +1,112 @@
+---
+description: "Testing strategy - TDD workflow, test structure, naming conventions"
+---
+
+# Testing Strategy
+
+## TDD Workflow (Mandatory)
+
+1. **RED** — Write a failing test first
+2. **GREEN** — Write minimal code to pass
+3. **REFACTOR** — Clean up while tests stay green
+
+**No implementation without tests first.**
+
+## Test Structure (AAA Pattern)
+
+### Arrange
+- Set up test data and dependencies
+- Configure mocks/stubs
+- Prepare the system under test
+
+### Act
+- Execute the behavior being tested
+- Single, clear action
+
+### Assert
+- Verify the expected outcome
+- Check state changes or method calls
+- Use descriptive assertions
+
+## Test Naming Convention
+
+```
+{MethodName}_When{Condition}_Should{ExpectedBehavior}
+```
+
+or
+
+```
+{methodName}_should{ExpectedBehavior}_when{Condition}
+```
+
+### Examples
+- `Handle_WhenUserIsValid_ShouldReturnSuccess`
+- `Handle_WhenEmailExists_ShouldReturnFailure`
+- `GetById_WhenUserDoesNotExist_ShouldReturnNotFound`
+
+## Test Categories
+
+### Unit Tests
+- Test individual components in isolation
+- Mock external dependencies
+- Fast execution (milliseconds)
+- High coverage of business logic
+
+### Integration Tests
+- Test interactions between components
+- Use real dependencies (database, message queue)
+- Slower execution (seconds)
+- Verify integration points work correctly
+
+### End-to-End Tests
+- Test complete workflows
+- Real environment (or close to it)
+- Slowest execution (seconds to minutes)
+- Verify system behavior from user perspective
+
+## Test Quality Standards
+
+- Tests MUST be deterministic and isolated
+- Tests MUST NOT depend on execution order
+- Tests MUST have a single, clear reason to fail
+- Each test validates ONE behavior
+- Use descriptive test names that explain the scenario
+- Keep tests simple and readable
+
+## Mocking Guidelines
+
+| Dependency Type | Approach |
+|----------------|----------|
+| External API | Mock |
+| Database (unit test) | Mock |
+| Database (integration test) | Use real database with test containers |
+| File system | Mock or use temp directory |
+| Time/Clock | Mock or inject |
+| Random number generator | Inject with seed |
+
+## Test Organization
+
+- Group tests by feature or component
+- Use shared test fixtures/helpers for common setup
+- Keep test data builders for complex objects
+- Separate unit, integration, and e2e tests
+
+## Coverage Guidelines
+
+- Aim for meaningful coverage, not arbitrary percentages
+- **Critical paths** - 100% coverage (authentication, payment, data loss scenarios)
+- **Business logic** - High coverage (80%+)
+- **Infrastructure code** - Integration tests preferred over mocks
+- **Don't** test framework code or trivial getters/setters
+
+## Conventions
+
+- Write tests before implementation (TDD)
+- One assertion concept per test (may have multiple assertion statements)
+- Tests are documentation - make them readable
+- Fail fast - if setup fails, fail immediately
+- Clean up resources in teardown/disposal
+- Use parameterized tests for multiple similar scenarios
+
+**See also:** Language-specific testing tools in `languages/*/testing.mdc`

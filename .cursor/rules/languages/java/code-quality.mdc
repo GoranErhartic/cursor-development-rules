@@ -1,0 +1,128 @@
+---
+description: "Code quality standards - Java 21 idioms, naming conventions, records, sealed classes"
+globs: ["**/*.java"]
+---
+
+# Code Quality Standards
+
+## Java 21 Idioms
+
+### Use Records for DTOs and Value Objects
+```java
+// DTO
+public record UserDto(UUID id, String email, String name) {}
+
+// Value Object
+public record Money(BigDecimal amount, String currency) {}
+
+// Command
+public record CreateUserCommand(String email, String name) implements Command<Result<UUID>> {}
+```
+
+### Sealed Classes for Domain Hierarchies
+```java
+public sealed interface PaymentMethod permits CreditCard, BankTransfer, PayPal {
+    Money getAmount();
+}
+
+public record CreditCard(String cardNumber, Money amount) implements PaymentMethod {
+    @Override
+    public Money getAmount() { return amount; }
+}
+```
+
+### Pattern Matching
+```java
+return switch (user) {
+    case null -> ResponseEntity.notFound().build();
+    case User u when !u.isActive() -> ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+    default -> ResponseEntity.ok(user);
+};
+```
+
+### Text Blocks
+```java
+String query = """
+    SELECT u FROM User u
+    WHERE u.email = :email
+    AND u.active = true
+    """;
+```
+
+## Naming Conventions
+
+| Element | Convention | Example |
+|---------|------------|---------|
+| Class | PascalCase | `UserService` |
+| Interface | PascalCase (NO 'I' prefix) | `UserRepository` |
+| Method | camelCase | `findById` |
+| Parameter | camelCase | `userId` |
+| Private field | camelCase | `userRepository` |
+| Constant | UPPER_SNAKE_CASE | `MAX_RETRY_COUNT` |
+| Package | lowercase | `com.example.user` |
+
+## Self-Documenting Code
+
+- Use **intention-revealing names** — `findActiveUsersByDepartment` not `findUsers`
+- Prefer clarity over brevity
+- Comments explain **why**, not **what**
+- Extract complex conditions into named booleans or methods
+
+```java
+// BAD
+if (u.getStatus() == 1 && u.getCreatedAt().isAfter(LocalDateTime.now().minusDays(30))) { }
+
+// GOOD
+boolean isRecentlyActiveUser = user.isActive() && user.wasCreatedWithinDays(30);
+if (isRecentlyActiveUser) { }
+```
+
+## Anti-Patterns to Avoid
+
+- ❌ God classes with too many responsibilities
+- ❌ Anemic domain models (logic in services, dumb entities)
+- ❌ Premature optimization
+- ❌ Over-engineering for hypothetical requirements
+- ❌ Catching generic `Exception` without proper handling
+- ❌ Magic numbers and hardcoded strings
+- ❌ Circular dependencies
+- ❌ Returning `null` (use `Optional<T>` instead)
+
+## Modern Java Practices
+
+### Use Optional for Nullable Returns
+```java
+// GOOD
+public Optional<User> findById(UUID id) {
+    return userRepository.findById(id);
+}
+
+// BAD
+public User findById(UUID id) {
+    return userRepository.findById(id).orElse(null);
+}
+```
+
+### Use Stream API
+```java
+List<String> activeEmails = users.stream()
+    .filter(User::isActive)
+    .map(User::getEmail)
+    .toList();
+```
+
+### Use var for Local Variables
+```java
+var user = userRepository.findById(id).orElseThrow();
+var query = entityManager.createQuery("SELECT u FROM User u", User.class);
+```
+
+## Boy Scout Rule
+
+> "Always leave the code better than you found it."
+
+- Fix small issues as you encounter them
+- Remove dead code and unused imports
+- Keep improvements proportional to the task
+
+**See also:** `architecture.mdc`

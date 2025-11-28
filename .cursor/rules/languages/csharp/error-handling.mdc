@@ -1,0 +1,142 @@
+---
+description: "Error handling patterns - ProblemDetails, Result pattern, global exception middleware"
+globs: ["**/*Exception*.cs", "**/Middleware/**/*.cs", "**/*Error*.cs", "**/*Result*.cs"]
+---
+
+# Error Handling
+
+## Result Pattern
+
+```csharp
+// Non-generic Result for operations without return values
+public sealed class Result
+{
+    public Error? Error { get; }
+    public bool IsSuccess => Error is null;
+    public bool IsFailure => !IsSuccess;
+
+    private Result() { }
+    private Result(Error error) => Error = error;
+
+    public static Result Success() => new();
+    public static Result Failure(Error error) => new(error);
+}
+
+// Generic Result for operations with return values
+public sealed class Result<T>
+{
+    public T? Value { get; }
+    public Error? Error { get; }
+    public bool IsSuccess => Error is null;
+    public bool IsFailure => !IsSuccess;
+
+    private Result(T value) => Value = value;
+    private Result(Error error) => Error = error;
+
+    public static Result<T> Success(T value) => new(value);
+    public static Result<T> Failure(Error error) => new(error);
+
+    public TResult Match<TResult>(Func<T, TResult> onSuccess, Func<Error, TResult> onFailure)
+        => IsSuccess ? onSuccess(Value!) : onFailure(Error!);
+}
+
+public sealed record Error(string Code, string Message);
+
+// Domain errors as static members
+public static class UserErrors
+{
+    public static readonly Error NotFound = new("User.NotFound", "User was not found");
+    public static readonly Error EmailAlreadyExists = new("User.EmailExists", "Email already exists");
+}
+```
+
+## Global Exception Middleware
+
+```csharp
+public sealed class GlobalExceptionMiddleware : IMiddleware
+{
+    private readonly ILogger<GlobalExceptionMiddleware> _logger;
+
+    public GlobalExceptionMiddleware(ILogger<GlobalExceptionMiddleware> logger)
+        => _logger = logger;
+
+    public async Task InvokeAsync(HttpContext context, RequestDelegate next)
+    {
+        try
+        {
+            await next(context);
+        }
+        catch (ValidationException ex)
+        {
+            await HandleValidationException(context, ex);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unhandled exception occurred");
+            await HandleUnexpectedException(context);
+        }
+    }
+
+    private static async Task HandleValidationException(HttpContext context, ValidationException ex)
+    {
+        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        var problemDetails = new ValidationProblemDetails
+        {
+            Status = StatusCodes.Status400BadRequest,
+            Title = "Validation Error",
+            Detail = "One or more validation errors occurred"
+        };
+
+        foreach (var error in ex.Errors)
+            problemDetails.Errors.Add(error.PropertyName, new[] { error.ErrorMessage });
+
+        await context.Response.WriteAsJsonAsync(problemDetails);
+    }
+
+    private static async Task HandleUnexpectedException(HttpContext context)
+    {
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        await context.Response.WriteAsJsonAsync(new ProblemDetails
+        {
+            Status = StatusCodes.Status500InternalServerError,
+            Title = "Internal Server Error",
+            Detail = "An unexpected error occurred. Please try again later."
+        });
+    }
+}
+```
+
+## Controller Error Mapping
+
+```csharp
+[HttpGet("{id:guid}")]
+public async Task<ActionResult<UserDto>> GetById(Guid id)
+{
+    var result = await _mediator.Send(new GetUserQuery(id));
+
+    return result.Match<ActionResult<UserDto>>(
+        success => Ok(success),
+        error => error.Code switch
+        {
+            "User.NotFound" => NotFound(ToProblemDetails(error, StatusCodes.Status404NotFound)),
+            _ => BadRequest(ToProblemDetails(error, StatusCodes.Status400BadRequest))
+        });
+}
+
+private static ProblemDetails ToProblemDetails(Error error, int statusCode) => new()
+{
+    Status = statusCode,
+    Title = error.Code,
+    Detail = error.Message
+};
+```
+
+## Conventions
+
+- NEVER expose stack traces or internal details in production
+- Use `ProblemDetails` (RFC 7807) for all error responses
+- Log exceptions with correlation IDs (see `serilog.mdc`)
+- Handle specific exceptions, not generic `Exception`
+- Domain errors are NOT exceptions — use Result pattern
+
+**See also:** `serilog.mdc`, `mediator.mdc`

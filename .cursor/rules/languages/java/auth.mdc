@@ -1,0 +1,491 @@
+---
+description: "Authentication and authorization with Spring Security - JWT, method security, RBAC"
+globs: ["**/*Security*.java", "**/*Auth*.java", "**/security/**/*.java", "**/*Filter*.java"]
+---
+
+# Authentication & Authorization
+
+## Dependencies
+
+```xml
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-security</artifactId>
+</dependency>
+
+<dependency>
+    <groupId>io.jsonwebtoken</groupId>
+    <artifactId>jjwt-api</artifactId>
+    <version>0.12.3</version>
+</dependency>
+
+<dependency>
+    <groupId>io.jsonwebtoken</groupId>
+    <artifactId>jjwt-impl</artifactId>
+    <version>0.12.3</version>
+    <scope>runtime</scope>
+</dependency>
+
+<dependency>
+    <groupId>io.jsonwebtoken</groupId>
+    <artifactId>jjwt-jackson</artifactId>
+    <version>0.12.3</version>
+    <scope>runtime</scope>
+</dependency>
+```
+
+## Security Configuration
+
+```java
+@Configuration
+@EnableWebSecurity
+@EnableMethodSecurity
+public class SecurityConfig {
+    
+    private final JwtAuthenticationFilter jwtAuthFilter;
+    private final AuthenticationProvider authenticationProvider;
+    
+    public SecurityConfig(
+            JwtAuthenticationFilter jwtAuthFilter,
+            AuthenticationProvider authenticationProvider) {
+        this.jwtAuthFilter = jwtAuthFilter;
+        this.authenticationProvider = authenticationProvider;
+    }
+    
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        http
+            .csrf(csrf -> csrf.disable())
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/api/auth/**", "/actuator/health").permitAll()
+                .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                .anyRequest().authenticated()
+            )
+            .sessionManagement(session -> session
+                .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+            )
+            .authenticationProvider(authenticationProvider)
+            .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+        
+        return http.build();
+    }
+}
+```
+
+## JWT Service
+
+```java
+@Service
+public class JwtService {
+    
+    @Value("${jwt.secret}")
+    private String secretKey;
+    
+    @Value("${jwt.expiration}")
+    private long jwtExpiration;
+    
+    @Value("${jwt.refresh-expiration}")
+    private long refreshExpiration;
+    
+    public String extractUsername(String token) {
+        return extractClaim(token, Claims::getSubject);
+    }
+    
+    public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
+        var claims = extractAllClaims(token);
+        return claimsResolver.apply(claims);
+    }
+    
+    public String generateToken(UserDetails userDetails) {
+        return generateToken(Map.of(), userDetails);
+    }
+    
+    public String generateToken(Map<String, Object> extraClaims, UserDetails userDetails) {
+        return buildToken(extraClaims, userDetails, jwtExpiration);
+    }
+    
+    public String generateRefreshToken(UserDetails userDetails) {
+        return buildToken(Map.of(), userDetails, refreshExpiration);
+    }
+    
+    private String buildToken(
+            Map<String, Object> extraClaims,
+            UserDetails userDetails,
+            long expiration) {
+        
+        var authorities = userDetails.getAuthorities().stream()
+            .map(GrantedAuthority::getAuthority)
+            .toList();
+        
+        return Jwts.builder()
+            .claims(extraClaims)
+            .subject(userDetails.getUsername())
+            .claim("authorities", authorities)
+            .issuedAt(new Date(System.currentTimeMillis()))
+            .expiration(new Date(System.currentTimeMillis() + expiration))
+            .signWith(getSignInKey())
+            .compact();
+    }
+    
+    public boolean isTokenValid(String token, UserDetails userDetails) {
+        var username = extractUsername(token);
+        return username.equals(userDetails.getUsername()) && !isTokenExpired(token);
+    }
+    
+    private boolean isTokenExpired(String token) {
+        return extractExpiration(token).before(new Date());
+    }
+    
+    private Date extractExpiration(String token) {
+        return extractClaim(token, Claims::getExpiration);
+    }
+    
+    private Claims extractAllClaims(String token) {
+        return Jwts.parser()
+            .verifyWith(getSignInKey())
+            .build()
+            .parseSignedClaims(token)
+            .getPayload();
+    }
+    
+    private SecretKey getSignInKey() {
+        var keyBytes = Decoders.BASE64.decode(secretKey);
+        return Keys.hmacShaKeyFor(keyBytes);
+    }
+}
+```
+
+## JWT Authentication Filter
+
+```java
+@Component
+public class JwtAuthenticationFilter extends OncePerRequestFilter {
+    
+    private final JwtService jwtService;
+    private final UserDetailsService userDetailsService;
+    
+    public JwtAuthenticationFilter(
+            JwtService jwtService,
+            UserDetailsService userDetailsService) {
+        this.jwtService = jwtService;
+        this.userDetailsService = userDetailsService;
+    }
+    
+    @Override
+    protected void doFilterInternal(
+            HttpServletRequest request,
+            HttpServletResponse response,
+            FilterChain filterChain) throws ServletException, IOException {
+        
+        var authHeader = request.getHeader("Authorization");
+        
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+        
+        var jwt = authHeader.substring(7);
+        var username = jwtService.extractUsername(jwt);
+        
+        if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+            var userDetails = userDetailsService.loadUserByUsername(username);
+            
+            if (jwtService.isTokenValid(jwt, userDetails)) {
+                var authToken = new UsernamePasswordAuthenticationToken(
+                    userDetails,
+                    null,
+                    userDetails.getAuthorities()
+                );
+                
+                authToken.setDetails(
+                    new WebAuthenticationDetailsSource().buildDetails(request)
+                );
+                
+                SecurityContextHolder.getContext().setAuthentication(authToken);
+            }
+        }
+        
+        filterChain.doFilter(request, response);
+    }
+}
+```
+
+## Authentication Provider
+
+```java
+@Configuration
+public class ApplicationConfig {
+    
+    private final UserRepository userRepository;
+    
+    public ApplicationConfig(UserRepository userRepository) {
+        this.userRepository = userRepository;
+    }
+    
+    @Bean
+    public UserDetailsService userDetailsService() {
+        return username -> userRepository.findByEmail(username)
+            .orElseThrow(() -> new UsernameNotFoundException("User not found"));
+    }
+    
+    @Bean
+    public AuthenticationProvider authenticationProvider() {
+        var authProvider = new DaoAuthenticationProvider();
+        authProvider.setUserDetailsService(userDetailsService());
+        authProvider.setPasswordEncoder(passwordEncoder());
+        return authProvider;
+    }
+    
+    @Bean
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration config) 
+            throws Exception {
+        return config.getAuthenticationManager();
+    }
+    
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+}
+```
+
+## User Entity with UserDetails
+
+```java
+@Entity
+@Table(name = "users")
+public class User implements UserDetails {
+    
+    @Id
+    @GeneratedValue(strategy = GenerationType.UUID)
+    private UUID id;
+    
+    @Column(unique = true, nullable = false)
+    private String email;
+    
+    @Column(nullable = false)
+    private String password;
+    
+    @Column(nullable = false)
+    private String name;
+    
+    @Enumerated(EnumType.STRING)
+    private Role role;
+    
+    private boolean enabled = true;
+    private boolean accountNonExpired = true;
+    private boolean accountNonLocked = true;
+    private boolean credentialsNonExpired = true;
+    
+    @Override
+    public Collection<? extends GrantedAuthority> getAuthorities() {
+        return List.of(new SimpleGrantedAuthority("ROLE_" + role.name()));
+    }
+    
+    @Override
+    public String getUsername() {
+        return email;
+    }
+    
+    // Other UserDetails methods
+    
+    public enum Role {
+        USER, ADMIN, MODERATOR
+    }
+}
+```
+
+## Authentication Controller
+
+```java
+@RestController
+@RequestMapping("/api/auth")
+public class AuthenticationController {
+    
+    private final AuthenticationService authenticationService;
+    
+    public AuthenticationController(AuthenticationService authenticationService) {
+        this.authenticationService = authenticationService;
+    }
+    
+    @PostMapping("/register")
+    public ResponseEntity<AuthenticationResponse> register(
+            @Valid @RequestBody RegisterRequest request) {
+        return ResponseEntity.ok(authenticationService.register(request));
+    }
+    
+    @PostMapping("/login")
+    public ResponseEntity<AuthenticationResponse> login(
+            @Valid @RequestBody LoginRequest request) {
+        return ResponseEntity.ok(authenticationService.login(request));
+    }
+    
+    @PostMapping("/refresh")
+    public ResponseEntity<AuthenticationResponse> refresh(
+            @RequestBody RefreshTokenRequest request) {
+        return ResponseEntity.ok(authenticationService.refreshToken(request));
+    }
+}
+```
+
+## Method-Level Security
+
+```java
+@Service
+public class UserService {
+    
+    // Only accessible by users with ADMIN role
+    @PreAuthorize("hasRole('ADMIN')")
+    public void deleteUser(UUID userId) {
+        userRepository.deleteById(userId);
+    }
+    
+    // Only accessible if user owns the resource
+    @PreAuthorize("#userId == authentication.principal.id")
+    public UserDto getUser(UUID userId) {
+        return userRepository.findById(userId)
+            .map(this::toDto)
+            .orElseThrow();
+    }
+    
+    // Multiple conditions
+    @PreAuthorize("hasRole('ADMIN') or #userId == authentication.principal.id")
+    public UserDto updateUser(UUID userId, UpdateUserRequest request) {
+        // ...
+    }
+    
+    // Custom permission check
+    @PreAuthorize("@userSecurityService.canAccessUser(#userId)")
+    public UserDto getUserProfile(UUID userId) {
+        // ...
+    }
+}
+
+@Component("userSecurityService")
+public class UserSecurityService {
+    
+    public boolean canAccessUser(UUID userId) {
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        
+        if (authentication.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"))) {
+            return true;
+        }
+        
+        var currentUser = (User) authentication.getPrincipal();
+        return currentUser.getId().equals(userId);
+    }
+}
+```
+
+## Custom Authorization
+
+```java
+@Configuration
+@EnableMethodSecurity
+public class MethodSecurityConfig {
+    
+    @Bean
+    public MethodSecurityExpressionHandler methodSecurityExpressionHandler() {
+        var expressionHandler = new DefaultMethodSecurityExpressionHandler();
+        expressionHandler.setPermissionEvaluator(new CustomPermissionEvaluator());
+        return expressionHandler;
+    }
+}
+
+public class CustomPermissionEvaluator implements PermissionEvaluator {
+    
+    @Override
+    public boolean hasPermission(
+            Authentication authentication,
+            Object targetDomainObject,
+            Object permission) {
+        
+        if (authentication == null || targetDomainObject == null || !(permission instanceof String)) {
+            return false;
+        }
+        
+        return checkPermission(authentication, targetDomainObject, permission.toString());
+    }
+    
+    @Override
+    public boolean hasPermission(
+            Authentication authentication,
+            Serializable targetId,
+            String targetType,
+            Object permission) {
+        
+        if (authentication == null || targetType == null || !(permission instanceof String)) {
+            return false;
+        }
+        
+        return checkPermission(authentication, targetId, targetType, permission.toString());
+    }
+    
+    private boolean checkPermission(
+            Authentication authentication,
+            Object targetDomainObject,
+            String permission) {
+        // Custom permission logic
+        return true;
+    }
+    
+    private boolean checkPermission(
+            Authentication authentication,
+            Serializable targetId,
+            String targetType,
+            String permission) {
+        // Custom permission logic
+        return true;
+    }
+}
+
+// Usage
+@PreAuthorize("hasPermission(#order, 'write')")
+public void updateOrder(Order order) {
+    // ...
+}
+```
+
+## Getting Current User
+
+```java
+@Service
+public class OrderService {
+    
+    public OrderDto createOrder(CreateOrderRequest request) {
+        var currentUser = getCurrentUser();
+        
+        var order = new Order();
+        order.setUserId(currentUser.getId());
+        // ...
+        
+        return toDto(orderRepository.save(order));
+    }
+    
+    private User getCurrentUser() {
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        return (User) authentication.getPrincipal();
+    }
+}
+
+// Or use @AuthenticationPrincipal in controllers
+@GetMapping("/me")
+public ResponseEntity<UserDto> getCurrentUser(
+        @AuthenticationPrincipal User currentUser) {
+    return ResponseEntity.ok(toDto(currentUser));
+}
+```
+
+## Conventions
+
+- Use `@PreAuthorize` for method-level security
+- NEVER store sensitive data in JWT payload (it's base64, not encrypted)
+- Use short-lived access tokens (15-30 min) with refresh tokens
+- Validate tokens on every request (don't cache authorization decisions)
+- Use BCrypt for password hashing
+- Store JWT secret in environment variables, not code
+- Use `SecurityContextHolder` to access current user
+- Implement proper logout (token blacklist or short expiration)
+
+**See also:** `security.mdc`, `input-sanitization.mdc`

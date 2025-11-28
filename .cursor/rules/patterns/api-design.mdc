@@ -1,0 +1,248 @@
+---
+description: "RESTful API design - HTTP methods, status codes, resource naming, versioning"
+---
+
+# API Design Principles
+
+## RESTful Conventions
+
+### Resource Naming
+
+- Use **plural nouns** for collections: `/users`, `/orders`
+- Use **lowercase** with hyphens for readability: `/user-profiles`
+- Nest resources to show relationships: `/users/{userId}/orders`
+- Keep URLs short and intuitive
+- Avoid verbs in URLs (use HTTP methods instead)
+
+### Examples
+```
+GET    /users              # Get all users
+GET    /users/{id}         # Get specific user
+POST   /users              # Create user
+PUT    /users/{id}         # Update user (full replacement)
+PATCH  /users/{id}         # Partial update
+DELETE /users/{id}         # Delete user
+```
+
+## HTTP Methods & Status Codes
+
+| Operation | Method | Success | Error Cases |
+|-----------|--------|---------|-------------|
+| Get single item | GET | 200 OK | 404 Not Found |
+| Get collection | GET | 200 OK (empty array if none) | — |
+| Create | POST | 201 Created | 400 Bad Request, 409 Conflict |
+| Full update | PUT | 200 OK or 204 No Content | 404 Not Found, 400 Bad Request |
+| Partial update | PATCH | 200 OK | 404 Not Found, 400 Bad Request |
+| Delete | DELETE | 204 No Content | 404 Not Found |
+
+## Status Code Guidelines
+
+### 2xx Success
+- **200 OK** - Request succeeded, response has body
+- **201 Created** - Resource created, include `Location` header
+- **204 No Content** - Request succeeded, no response body
+
+### 3xx Redirection
+- **301 Moved Permanently** - Resource permanently moved
+- **302 Found** - Temporary redirect
+- **304 Not Modified** - Resource not modified (caching)
+
+### 4xx Client Errors
+- **400 Bad Request** - Invalid syntax or validation failure
+- **401 Unauthorized** - Authentication required or failed
+- **403 Forbidden** - Authenticated but not authorized
+- **404 Not Found** - Resource doesn't exist
+- **409 Conflict** - Request conflicts with current state (duplicate)
+- **422 Unprocessable Entity** - Validation errors
+- **429 Too Many Requests** - Rate limit exceeded
+
+### 5xx Server Errors
+- **500 Internal Server Error** - Unexpected server error
+- **502 Bad Gateway** - Invalid response from upstream
+- **503 Service Unavailable** - Temporarily unavailable
+- **504 Gateway Timeout** - Upstream timeout
+
+## Request/Response Format
+
+### Content Type
+- Use JSON as default: `Content-Type: application/json`
+- Support content negotiation if multiple formats needed
+- Specify character encoding: `application/json; charset=utf-8`
+
+### Request Body (POST/PUT/PATCH)
+```json
+{
+  "email": "user@example.com",
+  "name": "John Doe",
+  "age": 30
+}
+```
+
+### Success Response
+```json
+{
+  "id": "123e4567-e89b-12d3-a456-426614174000",
+  "email": "user@example.com",
+  "name": "John Doe",
+  "age": 30,
+  "createdAt": "2024-01-15T10:30:00Z"
+}
+```
+
+### Error Response (RFC 7807)
+```json
+{
+  "type": "https://api.example.com/errors/validation-error",
+  "title": "Validation Failed",
+  "status": 400,
+  "detail": "One or more fields are invalid",
+  "instance": "/users",
+  "errors": {
+    "email": ["Email format is invalid"],
+    "age": ["Must be at least 18"]
+  }
+}
+```
+
+## Pagination
+
+For collection endpoints returning many items:
+
+### Query Parameters
+- `page` - Page number (1-indexed or 0-indexed, be consistent)
+- `size` or `limit` - Items per page
+- `sort` - Sort field(s)
+- `order` or `direction` - Sort direction (asc/desc)
+
+### Response Format
+```json
+{
+  "data": [ /* items */ ],
+  "pagination": {
+    "page": 1,
+    "size": 20,
+    "total": 150,
+    "totalPages": 8
+  }
+}
+```
+
+### Alternative: Cursor-Based Pagination
+For large datasets or real-time data:
+```json
+{
+  "data": [ /* items */ ],
+  "pagination": {
+    "nextCursor": "eyJpZCI6MTIzfQ==",
+    "hasMore": true
+  }
+}
+```
+
+## Filtering & Searching
+
+### Simple Filtering
+```
+GET /users?status=active&role=admin
+```
+
+### Complex Queries
+```
+GET /users?filter[email][contains]=example.com&filter[age][gte]=18
+```
+
+### Full-Text Search
+```
+GET /users?q=john+doe
+```
+
+## Versioning
+
+### URL Versioning (Recommended for simplicity)
+```
+GET /api/v1/users
+GET /api/v2/users
+```
+
+### Header Versioning
+```
+GET /api/users
+Accept: application/vnd.company.v1+json
+```
+
+### Versioning Guidelines
+- Version when breaking changes occur
+- Support old versions for reasonable period
+- Document deprecation timeline
+- Never change v1 once published
+
+## Idempotency
+
+| Method | Idempotent? | Notes |
+|--------|-------------|-------|
+| GET | Yes | Multiple calls same result |
+| PUT | Yes | Multiple calls same final state |
+| DELETE | Yes | Deleting already-deleted is fine (404 or 204) |
+| POST | No | Multiple calls create multiple resources |
+| PATCH | Maybe | Depends on implementation |
+
+### Idempotency Keys
+For POST operations that should be idempotent:
+```
+POST /orders
+Idempotency-Key: 123e4567-e89b-12d3-a456-426614174000
+```
+
+## HATEOAS (Optional)
+
+Include links to related resources:
+```json
+{
+  "id": "123",
+  "name": "John Doe",
+  "_links": {
+    "self": { "href": "/users/123" },
+    "orders": { "href": "/users/123/orders" },
+    "profile": { "href": "/users/123/profile" }
+  }
+}
+```
+
+## Common Headers
+
+### Request Headers
+- `Authorization` - Authentication token
+- `Content-Type` - Request body format
+- `Accept` - Desired response format
+- `Accept-Language` - Preferred language
+- `X-Correlation-Id` - Request tracing
+
+### Response Headers
+- `Content-Type` - Response body format
+- `Location` - Created resource URL (201 responses)
+- `Cache-Control` - Caching directives
+- `ETag` - Resource version for caching
+- `X-Correlation-Id` - Echo back for tracing
+- `X-RateLimit-*` - Rate limiting info
+
+## API Documentation
+
+- Use OpenAPI/Swagger specification
+- Document all endpoints, parameters, responses
+- Include example requests and responses
+- Document authentication requirements
+- Provide changelog for version updates
+
+## Conventions
+
+- Be consistent across all endpoints
+- Use standard HTTP semantics
+- Return appropriate status codes
+- Include meaningful error messages
+- Support common query patterns (filtering, sorting, pagination)
+- Version your API from the start
+- Document everything
+
+**See also:** 
+- `patterns/error-handling.mdc` - Error response format
+- `languages/*/controllers.mdc` - Platform-specific controller patterns

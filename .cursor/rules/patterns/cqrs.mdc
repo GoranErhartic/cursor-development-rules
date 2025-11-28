@@ -1,0 +1,257 @@
+---
+description: "CQRS pattern - Command Query Responsibility Segregation concepts"
+---
+
+# CQRS Pattern
+
+## Core Concept
+
+**Command Query Responsibility Segregation** - Separate operations that modify state (Commands) from operations that read state (Queries).
+
+## Why CQRS?
+
+### Benefits
+- **Clear separation** - Write and read models can evolve independently
+- **Optimized queries** - Read models optimized for specific use cases
+- **Scalability** - Scale reads and writes independently
+- **Audit trail** - Commands provide clear record of changes
+- **Security** - Different authorization for reads vs writes
+
+### When to Use
+- Complex business logic with many validations
+- Different read and write performance requirements
+- Multiple read representations of same data
+- Event sourcing scenarios
+
+### When NOT to Use
+- Simple CRUD applications
+- When separation adds unnecessary complexity
+- Small applications with simple requirements
+
+## Commands
+
+### Characteristics
+- **Imperative naming** - `CreateUser`, `UpdateOrder`, `DeleteProduct`
+- **Modify state** - Change data in the system
+- **Return result** - Success/failure with minimal data (usually just ID)
+- **One handler** - Single responsibility for each command
+- **Validated** - Business rules enforced
+- **Transactional** - Atomic operation
+
+### Example Structure
+```
+Command:
+  - Name: CreateUserCommand
+  - Properties: Email, Name, Password
+  - Return: Result<UserId>
+
+Handler:
+  1. Validate business rules
+  2. Create domain entity
+  3. Persist changes
+  4. Publish domain event (optional)
+  5. Return result
+```
+
+## Queries
+
+### Characteristics
+- **Question naming** - `GetUser`, `FindActiveOrders`, `SearchProducts`
+- **Read-only** - Never modify state
+- **Return DTOs** - Project data for specific use case
+- **One handler** - Single responsibility for each query
+- **Optimized** - May bypass domain models, use views/materialized queries
+- **No transactions** - Read-only operations
+
+### Example Structure
+```
+Query:
+  - Name: GetUserQuery
+  - Properties: UserId
+  - Return: Result<UserDto>
+
+Handler:
+  1. Fetch data (may use read-optimized model)
+  2. Map to DTO
+  3. Return result
+```
+
+## Command/Query Handler Pattern
+
+### Handler Interface
+```
+Command Handler:
+  Input: Command
+  Output: Result<T> or Result (for operations without return value)
+  
+Query Handler:
+  Input: Query
+  Output: Result<DTO>
+```
+
+### Dispatcher/Mediator
+- Routes commands/queries to appropriate handlers
+- Can apply cross-cutting concerns (validation, logging, transactions)
+- Decouples caller from handler implementation
+
+## Pipeline Behaviors
+
+Cross-cutting concerns applied to all commands/queries:
+
+1. **Logging** - Entry/exit logging
+2. **Validation** - Input validation before handler
+3. **Authorization** - Check permissions
+4. **Transaction** - Wrap commands in transaction
+5. **Error handling** - Consistent error handling
+6. **Performance monitoring** - Track execution time
+
+### Order Matters
+```
+Request → Logging → Validation → Authorization → Transaction → Handler
+```
+
+## Domain Events
+
+When commands modify state, publish domain events:
+
+### Events vs Commands
+- **Commands** - Imperative, can be rejected
+- **Events** - Past tense, already happened, can't be rejected
+
+### Example
+```
+Command: CreateOrderCommand
+  → Handler creates order
+  → Publishes: OrderCreatedEvent
+  → Other handlers react (send email, update inventory, etc.)
+```
+
+## Read Models vs Write Models
+
+### Write Model (Commands)
+- Rich domain model with behavior
+- Business rule enforcement
+- Aggregates and entities
+- Normalized structure
+- Consistency focused
+
+### Read Model (Queries)
+- Denormalized views
+- Optimized for specific queries
+- May duplicate data
+- Simple DTOs
+- Performance focused
+
+### Synchronization
+- **Synchronous** - Update read model in same transaction
+- **Asynchronous** - Update via domain events (eventual consistency)
+
+## CQRS Without Event Sourcing
+
+CQRS doesn't require event sourcing:
+- Same database for reads and writes (different models)
+- Commands update write model
+- Queries read from read model
+- Simpler than full event sourcing
+
+## CQRS With Event Sourcing
+
+Advanced pattern:
+- Commands generate events
+- Events are stored (event store)
+- Current state derived from events
+- Read models built from event projections
+
+## Validation Strategy
+
+### Command Validation
+- Input validation (format, required fields)
+- Business rule validation
+- State validation (entity exists, no duplicates)
+- Authorization (user can perform action)
+
+### Query Validation
+- Input validation (parameters valid)
+- Authorization (user can access data)
+- Usually simpler than commands
+
+## Error Handling
+
+### Commands
+- Return `Result.Failure(error)` for expected failures
+- Throw exceptions for unexpected errors
+- Include error codes for client handling
+
+### Queries
+- Return `Result.Failure(error)` if not found or unauthorized
+- Return empty collections (not errors) for "no results"
+- Throw exceptions for unexpected errors
+
+## Testing Strategy
+
+### Command Tests
+- Given initial state
+- When command executed
+- Then verify: state changed, events published, result correct
+
+### Query Tests
+- Given data in database
+- When query executed
+- Then verify: correct DTO returned
+
+### Integration Tests
+- Test command → event → query flow
+- Verify read model synchronization
+
+## Common Patterns
+
+### Command
+```
+CreateUser(email, name)
+  → Validates uniqueness
+  → Creates user entity
+  → Saves to database
+  → Publishes UserCreatedEvent
+  → Returns Result<UserId>
+```
+
+### Query
+```
+GetUserById(userId)
+  → Fetches from database
+  → Maps to UserDto
+  → Returns Result<UserDto>
+```
+
+### Event
+```
+UserCreatedEvent(userId, email, timestamp)
+  → Sent to message bus
+  → Email service subscribes → sends welcome email
+  → Analytics service subscribes → tracks registration
+```
+
+## Conventions
+
+- Commands use imperative verbs: `Create`, `Update`, `Delete`, `Send`
+- Queries use questions: `Get`, `Find`, `Search`, `List`
+- Events use past tense: `Created`, `Updated`, `Deleted`, `Sent`
+- One handler per command/query
+- Handlers are stateless
+- Commands return `Result<T>` or `Result`
+- Queries return `Result<DTO>`
+- Use DTOs for queries (never domain entities)
+- Keep commands and queries simple (single responsibility)
+
+## Anti-Patterns
+
+- ❌ Query that modifies state
+- ❌ Command that returns full entity
+- ❌ Sharing models between commands and queries
+- ❌ Commands/queries with multiple responsibilities
+- ❌ Bypassing handlers (direct database access)
+
+**See also:**
+- `patterns/architecture.mdc` - Overall architecture context
+- `patterns/error-handling.mdc` - Result pattern details
+- `languages/*/cqrs.mdc` - Language-specific implementations

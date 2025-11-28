@@ -282,6 +282,10 @@ If you find this project helpful, consider supporting its development:
 
 [![Ko-fi](https://img.shields.io/badge/Support%20on-Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi)](https://ko-fi.com/goranlegenda)
 
+[![PayPal](https://img.shields.io/badge/PayPal-Support-blue?logo=paypal&logoColor=white)](https://paypal.me/GoranLegenda)
+
+**Or use PayPal directly:** [paypal.me/GoranLegenda](https://paypal.me/GoranLegenda)
+
 Your support helps maintain and expand this rule system with:
 - 🆕 New language support
 - 📖 Better documentation

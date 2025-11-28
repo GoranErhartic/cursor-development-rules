@@ -1,0 +1,120 @@
+---
+description: "Serilog structured logging - configuration, enrichers, correlation IDs, log levels"
+globs: ["**/Program.cs", "**/Logging/**/*.cs", "**/*Logger*.cs", "**/appsettings*.json"]
+---
+
+# Serilog Structured Logging
+
+## Setup
+
+```csharp
+// Program.cs
+Log.Logger = new LoggerConfiguration()
+    .ReadFrom.Configuration(builder.Configuration)
+    .Enrich.FromLogContext()
+    .Enrich.WithMachineName()
+    .Enrich.WithEnvironmentName()
+    .Enrich.WithCorrelationId()
+    .CreateLogger();
+
+builder.Host.UseSerilog();
+
+// Request logging middleware
+app.UseSerilogRequestLogging(options =>
+{
+    options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
+    {
+        diagnosticContext.Set("UserId", httpContext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value);
+        diagnosticContext.Set("ClientIp", httpContext.Connection.RemoteIpAddress);
+    };
+});
+```
+
+## Configuration (appsettings.json)
+
+```json
+{
+  "Serilog": {
+    "MinimumLevel": {
+      "Default": "Information",
+      "Override": {
+        "Microsoft.AspNetCore": "Warning",
+        "Microsoft.EntityFrameworkCore": "Warning",
+        "System": "Warning"
+      }
+    },
+    "WriteTo": [
+      { "Name": "Console" },
+      {
+        "Name": "File",
+        "Args": {
+          "path": "logs/log-.txt",
+          "rollingInterval": "Day",
+          "retainedFileCountLimit": 7
+        }
+      }
+    ]
+  }
+}
+```
+
+## Structured Logging Best Practices
+
+```csharp
+// CORRECT - Structured with named properties
+_logger.LogInformation("User {UserId} created order {OrderId} for {Amount:C}", 
+    userId, orderId, amount);
+
+// WRONG - String interpolation (loses structure)
+_logger.LogInformation($"User {userId} created order {orderId} for {amount:C}");
+
+// CORRECT - Include relevant context
+_logger.LogError(exception, "Failed to process payment for order {OrderId}", orderId);
+
+// WRONG - Missing exception parameter
+_logger.LogError($"Failed to process payment: {exception.Message}");
+```
+
+## Correlation IDs
+
+```csharp
+public sealed class CorrelationIdMiddleware : IMiddleware
+{
+    private const string CorrelationIdHeader = "X-Correlation-Id";
+
+    public async Task InvokeAsync(HttpContext context, RequestDelegate next)
+    {
+        var correlationId = context.Request.Headers[CorrelationIdHeader].FirstOrDefault()
+            ?? Guid.NewGuid().ToString();
+
+        context.Response.Headers[CorrelationIdHeader] = correlationId;
+
+        using (LogContext.PushProperty("CorrelationId", correlationId))
+        {
+            await next(context);
+        }
+    }
+}
+```
+
+## Log Levels
+
+| Level | Use Case |
+|-------|----------|
+| `Verbose` | Detailed debugging (rarely in production) |
+| `Debug` | Development diagnostics |
+| `Information` | Normal operations, request/response |
+| `Warning` | Unexpected but recoverable situations |
+| `Error` | Exceptions, failures requiring attention |
+| `Fatal` | Application crash, unrecoverable errors |
+
+## Conventions
+
+- ALWAYS use structured logging with named placeholders
+- ALWAYS include correlation ID in logs
+- NEVER log sensitive data (passwords, tokens, PII)
+- Use appropriate log levels
+- Include exception object as first parameter in `LogError`
+- Configure log level overrides to reduce noise from frameworks
+
+**See also:** `error-handling.mdc`

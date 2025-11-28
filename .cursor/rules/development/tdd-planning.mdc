@@ -1,0 +1,24 @@
+---
+description: "TDD planning requirements - test specifications before implementation"
+---
+
+# TDD Planning Requirements
+
+## When Creating Implementation Plans
+
+Before any implementation work, the plan MUST include:
+
+1. **Test Scenarios** - List of test cases to be written
+2. **Expected Behaviors** - What each test validates
+3. **Test File Locations** - Where tests will be created
+
+## Plan Template
+
+| Test Name | Behavior | Priority |
+|-----------|----------|----------|
+| `Method_WhenCondition_ShouldResult` | Description | High/Med/Low |
+
+## Verification
+- [ ] Plan includes test specifications
+- [ ] Tests are written before implementation
+- [ ] Each behavior has corresponding test

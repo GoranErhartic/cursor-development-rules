@@ -1,0 +1,111 @@
+---
+description: "Custom mediator pattern for CQRS - commands, queries, handlers, pipeline behaviors"
+globs: ["**/*Command*.cs", "**/*Query*.cs", "**/*Handler*.cs", "**/Behaviors/**/*.cs"]
+---
+
+# Custom Mediator Pattern
+
+## Core Interfaces
+
+```csharp
+public interface IRequest<TResponse> { }
+
+public interface IRequestHandler<TRequest, TResponse> where TRequest : IRequest<TResponse>
+{
+    Task<TResponse> Handle(TRequest request, CancellationToken ct);
+}
+
+public interface IMediator
+{
+    Task<TResponse> Send<TResponse>(IRequest<TResponse> request, CancellationToken ct = default);
+}
+```
+
+## Command Pattern
+
+```csharp
+// Command
+public sealed record CreateUserCommand(string Email, string Name) : IRequest<Result<Guid>>;
+
+// Handler
+public sealed class CreateUserCommandHandler : IRequestHandler<CreateUserCommand, Result<Guid>>
+{
+    private readonly IUserRepository _userRepository;
+    private readonly IUnitOfWork _unitOfWork;
+
+    public CreateUserCommandHandler(IUserRepository userRepository, IUnitOfWork unitOfWork)
+    {
+        _userRepository = userRepository;
+        _unitOfWork = unitOfWork;
+    }
+
+    public async Task<Result<Guid>> Handle(CreateUserCommand request, CancellationToken ct)
+    {
+        var existingUser = await _userRepository.GetByEmailAsync(request.Email, ct);
+        if (existingUser is not null)
+            return Result.Failure<Guid>(UserErrors.EmailAlreadyExists);
+
+        var user = User.Create(request.Email, request.Name);
+        _userRepository.Add(user);
+        await _unitOfWork.SaveChangesAsync(ct);
+
+        return Result.Success(user.Id);
+    }
+}
+```
+
+## Query Pattern
+
+```csharp
+// Query
+public sealed record GetUserQuery(Guid Id) : IRequest<Result<UserDto>>;
+
+// Handler
+public sealed class GetUserQueryHandler : IRequestHandler<GetUserQuery, Result<UserDto>>
+{
+    private readonly AppDbContext _context;
+
+    public GetUserQueryHandler(AppDbContext context) => _context = context;
+
+    public async Task<Result<UserDto>> Handle(GetUserQuery request, CancellationToken ct)
+    {
+        var user = await _context.Users
+            .AsNoTracking()
+            .Where(u => u.Id == request.Id)
+            .Select(u => new UserDto(u.Id, u.Email, u.Name))
+            .FirstOrDefaultAsync(ct);
+
+        return user is null 
+            ? Result.Failure<UserDto>(UserErrors.NotFound) 
+            : Result.Success(user);
+    }
+}
+```
+
+## Pipeline Behaviors
+
+```csharp
+public interface IPipelineBehavior<TRequest, TResponse>
+{
+    Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken ct);
+}
+
+public delegate Task<TResponse> RequestHandlerDelegate<TResponse>();
+```
+
+Order of behaviors:
+1. Logging (entry/exit)
+2. Sanitization (string normalization)
+3. Validation (FluentValidation)
+4. Transaction (if command)
+5. Handler execution
+
+## Conventions
+
+- Commands MUST return `Result<T>` (with value) or `Result` (without value) — see `error-handling.mdc`
+- Queries MUST return `Result<T>` with DTOs
+- ONE handler per command/query
+- Handlers are `sealed` classes
+- Use `record` for commands and queries
+
+**See also:** `request-input-sanitization.mdc`, `request-validation.mdc`, `error-handling.mdc`

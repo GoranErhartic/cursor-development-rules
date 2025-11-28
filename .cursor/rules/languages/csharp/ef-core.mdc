@@ -1,0 +1,154 @@
+---
+description: "Entity Framework Core patterns - DbContext, repositories, migrations, query optimization"
+globs: ["**/*DbContext*.cs", "**/Entities/**/*.cs", "**/Repositories/**/*.cs", "**/Migrations/**/*.cs", "**/*Repository*.cs"]
+---
+
+# Entity Framework Core Patterns
+
+## DbContext Configuration
+
+```csharp
+public sealed class AppDbContext : DbContext
+{
+    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
+
+    public DbSet<User> Users => Set<User>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
+    }
+}
+```
+
+## Entity Configuration
+
+```csharp
+public sealed class UserConfiguration : IEntityTypeConfiguration<User>
+{
+    public void Configure(EntityTypeBuilder<User> builder)
+    {
+        builder.ToTable("Users");
+        builder.HasKey(x => x.Id);
+        builder.Property(x => x.Email).HasMaxLength(256).IsRequired();
+        builder.HasIndex(x => x.Email).IsUnique();
+    }
+}
+```
+
+## Repository Pattern
+
+```csharp
+public interface IUserRepository
+{
+    Task<User?> GetByIdAsync(Guid id, CancellationToken ct = default);
+    Task<User?> GetByEmailAsync(string email, CancellationToken ct = default);
+    void Add(User user);
+    void Remove(User user);
+}
+```
+
+## Query Best Practices
+
+| Scenario | Approach |
+|----------|----------|
+| Read-only queries | `.AsNoTracking()` |
+| Single item | `.FirstOrDefaultAsync()` (not `.SingleOrDefaultAsync()` unless uniqueness matters) |
+| Exists check | `.AnyAsync()` |
+| Count | `.CountAsync()` |
+| Projections | `.Select(x => new Dto { ... })` — avoid loading full entities |
+| Pagination | `.Skip(n).Take(m)` after ordering |
+
+## Anti-Patterns to Avoid
+
+- NEVER use `.ToList()` then LINQ — query in database
+- NEVER load navigation properties you don't need
+- NEVER use `Include()` for read-only projections — use `Select()`
+- NEVER call `SaveChangesAsync()` multiple times per operation
+
+## Migrations
+
+```bash
+dotnet ef migrations add MigrationName --project src/Infrastructure --startup-project src/Api
+dotnet ef database update --project src/Infrastructure --startup-project src/Api
+```
+
+- ALWAYS review generated migrations before applying
+- NEVER modify existing migrations after they're applied
+
+## Unit of Work Pattern
+
+### IUnitOfWork Interface
+
+```csharp
+public interface IUnitOfWork
+{
+    Task<int> SaveChangesAsync(CancellationToken ct = default);
+}
+```
+
+### DbContext Implementation
+
+```csharp
+public sealed class AppDbContext : DbContext, IUnitOfWork
+{
+    // DbContext already implements SaveChangesAsync
+}
+```
+
+### Usage Rules
+
+| Rule | Reason |
+|------|--------|
+| Inject `IUnitOfWork` into command handlers | Commands mutate state and need to persist |
+| Do NOT inject into query handlers | Queries are read-only, use `DbContext` directly with `AsNoTracking()` |
+| Call `SaveChangesAsync()` once at end of handler | Ensures atomic operations and single database roundtrip |
+| NEVER call `SaveChangesAsync()` inside repositories | Repositories track changes; persistence is the handler's responsibility |
+
+### Example Handler
+
+```csharp
+public sealed class CreateUserCommandHandler : IRequestHandler<CreateUserCommand, Result<Guid>>
+{
+    private readonly IUserRepository _userRepository;
+    private readonly IUnitOfWork _unitOfWork;
+
+    public CreateUserCommandHandler(IUserRepository userRepository, IUnitOfWork unitOfWork)
+    {
+        _userRepository = userRepository;
+        _unitOfWork = unitOfWork;
+    }
+
+    public async Task<Result<Guid>> Handle(CreateUserCommand request, CancellationToken ct)
+    {
+        // Business logic and repository calls...
+        _userRepository.Add(user);
+        
+        // Persist all changes at the END of the method
+        await _unitOfWork.SaveChangesAsync(ct);
+        
+        return Result.Success(user.Id);
+    }
+}
+```
+
+### Multi-Aggregate Transactions
+
+For operations spanning multiple aggregates, use explicit transactions:
+
+```csharp
+await using var transaction = await _context.Database.BeginTransactionAsync(ct);
+try
+{
+    // Multiple aggregate operations...
+    await _unitOfWork.SaveChangesAsync(ct);
+    await transaction.CommitAsync(ct);
+}
+catch
+{
+    await transaction.RollbackAsync(ct);
+    throw;
+}
+```
+
+**See also:** `architecture.mdc`, `mediator.mdc`

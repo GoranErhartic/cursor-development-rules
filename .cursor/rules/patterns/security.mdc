@@ -1,0 +1,160 @@
+---
+description: "Security principles - secrets management, HTTPS, CORS, headers, authentication concepts"
+---
+
+# Security Principles
+
+## Critical Rules
+
+- **NEVER expose secrets, API keys, or credentials in code**
+- **NEVER commit secrets to source control**
+- **ALWAYS use HTTPS in production**
+- **ALWAYS validate and sanitize user input**
+- **ALWAYS use prepared statements/parameterized queries**
+
+## Secrets Management
+
+### Development
+- Use environment variables
+- Use local secret managers (user secrets, .env files in .gitignore)
+- Never hardcode even in development
+
+### Production
+- Use dedicated secret management services:
+  - Cloud provider secret managers (AWS Secrets Manager, Azure Key Vault, GCP Secret Manager)
+  - HashiCorp Vault
+  - Kubernetes Secrets
+- Rotate secrets regularly
+- Use different secrets per environment
+
+### What Counts as a Secret
+- Database credentials
+- API keys and tokens
+- JWT signing keys
+- Encryption keys
+- Third-party service credentials
+- Session secrets
+
+## HTTPS/TLS
+
+- **Production** - HTTPS only, no HTTP fallback
+- **Development** - HTTPS recommended for testing auth flows
+- Use TLS 1.2 minimum (TLS 1.3 preferred)
+- Enable HSTS (HTTP Strict Transport Security)
+- Redirect HTTP to HTTPS
+
+## Security Headers
+
+All responses should include:
+
+| Header | Value | Purpose |
+|--------|-------|---------|
+| `X-Content-Type-Options` | `nosniff` | Prevent MIME type sniffing |
+| `X-Frame-Options` | `DENY` or `SAMEORIGIN` | Prevent clickjacking |
+| `X-XSS-Protection` | `1; mode=block` | Enable XSS filter |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | Control referer information |
+| `Content-Security-Policy` | Appropriate policy | Prevent XSS and injection attacks |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | Force HTTPS |
+
+## CORS Configuration
+
+### Production
+- Specify exact allowed origins (never use `*` with credentials)
+- Whitelist specific HTTP methods
+- Whitelist specific headers
+- Set appropriate max age for preflight caching
+
+### Development
+- Can be more permissive but still specific
+- Never deploy development CORS config to production
+
+### Common Mistakes
+- ❌ `allowedOrigins: ["*"]` with `allowCredentials: true` (invalid combination)
+- ❌ Allowing all origins in production
+- ❌ Not validating Origin header
+
+## Authentication Concepts
+
+### Token-Based (JWT)
+- Short-lived access tokens (15-30 minutes)
+- Long-lived refresh tokens (7-30 days)
+- Store tokens securely (httpOnly cookies or secure storage)
+- Validate tokens on every request
+- Include minimal claims (don't store sensitive data)
+
+### Session-Based
+- Server-side session storage
+- Secure session cookies (httpOnly, secure, sameSite)
+- Session timeout and renewal
+- Prevent session fixation
+
+### Password Handling
+- **NEVER** store plaintext passwords
+- Use strong hashing algorithms (bcrypt, argon2, scrypt)
+- Use salt (unique per password)
+- Enforce minimum password strength
+- Implement rate limiting on login attempts
+
+## Authorization Concepts
+
+### Role-Based Access Control (RBAC)
+- Assign roles to users
+- Grant permissions to roles
+- Check role on protected resources
+
+### Policy-Based Authorization
+- Define policies combining multiple factors
+- More flexible than simple roles
+- Can include context (time, location, resource ownership)
+
+### Resource-Based Authorization
+- Check if user can access specific resource
+- Consider ownership, sharing, permissions
+
+## Input Validation & Sanitization
+
+See `patterns/input-sanitization.mdc` for detailed guidance.
+
+Key principles:
+- Validate at boundaries (API entry points)
+- Use allowlists, not blocklists
+- Sanitize for output context (HTML, SQL, shell)
+- Never trust client-side validation alone
+
+## Rate Limiting
+
+- Protect against brute force attacks
+- Prevent DoS/DDoS
+- Limit by IP, user, or API key
+- Return 429 (Too Many Requests) when limit exceeded
+- Include retry-after header
+
+## Audit Logging
+
+- Log authentication events (login, logout, failures)
+- Log authorization failures
+- Log sensitive operations (data deletion, permission changes)
+- Include correlation IDs for tracing
+- **Never log** passwords, tokens, or sensitive PII
+- Ensure logs are tamper-proof
+
+## Dependency Security
+
+- Scan dependencies for known vulnerabilities
+- Keep dependencies up to date
+- Use automated scanning tools
+- Review security advisories
+- Have a process for patching critical vulnerabilities
+
+## Conventions
+
+- Security is a requirement, not a feature
+- Defense in depth - multiple layers of security
+- Fail securely - errors shouldn't leak information
+- Principle of least privilege
+- Assume breach - design for when (not if) you're compromised
+
+**See also:** 
+- `patterns/input-sanitization.mdc` - Input validation details
+- `languages/*/security.mdc` - Platform-specific implementations
+- `languages/*/auth.mdc` - Authentication/authorization implementations

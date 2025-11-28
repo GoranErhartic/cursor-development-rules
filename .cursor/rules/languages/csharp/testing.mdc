@@ -1,0 +1,139 @@
+---
+description: "Testing strategy - TDD workflow, xUnit, FluentAssertions, Moq, Testcontainers"
+globs: ["**/*Tests.cs", "**/*Test.cs", "**/Tests/**/*.cs", "**/*.Tests/**/*.cs"]
+---
+
+# Testing Strategy
+
+## TDD Workflow (Mandatory)
+
+1. **RED** — Write a failing test first
+2. **GREEN** — Write minimal code to pass
+3. **REFACTOR** — Clean up while tests stay green
+
+**No implementation without tests first.**
+
+## Test Structure (AAA Pattern)
+
+```csharp
+public sealed class CreateUserCommandHandlerTests
+{
+    private readonly Mock<IUserRepository> _userRepositoryMock = new();
+    private readonly Mock<IUnitOfWork> _unitOfWorkMock = new();
+    private readonly CreateUserCommandHandler _sut;
+
+    public CreateUserCommandHandlerTests()
+    {
+        _sut = new CreateUserCommandHandler(
+            _userRepositoryMock.Object,
+            _unitOfWorkMock.Object);
+    }
+
+    [Fact]
+    public async Task Handle_WhenEmailIsUnique_ShouldCreateUser()
+    {
+        // Arrange
+        var command = new CreateUserCommand("test@example.com", "Test User");
+        _userRepositoryMock
+            .Setup(x => x.GetByEmailAsync(command.Email, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((User?)null);
+
+        // Act
+        var result = await _sut.Handle(command, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.Should().BeTrue();
+        result.Value.Should().NotBeEmpty();
+        _userRepositoryMock.Verify(x => x.Add(It.IsAny<User>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Handle_WhenEmailExists_ShouldReturnFailure()
+    {
+        // Arrange
+        var command = new CreateUserCommand("existing@example.com", "Test User");
+        _userRepositoryMock
+            .Setup(x => x.GetByEmailAsync(command.Email, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(User.Create("existing@example.com", "Existing"));
+
+        // Act
+        var result = await _sut.Handle(command, CancellationToken.None);
+
+        // Assert
+        result.IsFailure.Should().BeTrue();
+        result.Error.Should().Be(UserErrors.EmailAlreadyExists);
+    }
+}
+```
+
+## Naming Convention
+
+```
+{MethodName}_When{Condition}_Should{ExpectedBehavior}
+```
+
+Examples:
+- `Handle_WhenUserIsValid_ShouldReturnSuccess`
+- `Handle_WhenEmailIsInvalid_ShouldThrowValidationException`
+- `GetById_WhenUserDoesNotExist_ShouldReturnNotFound`
+
+## Integration Tests with Testcontainers
+
+```csharp
+public sealed class UsersApiTests : IAsyncLifetime
+{
+    private readonly MsSqlContainer _dbContainer = new MsSqlBuilder()
+        .WithImage("mcr.microsoft.com/mssql/server:2022-latest")
+        .Build();
+
+    private WebApplicationFactory<Program> _factory = null!;
+    private HttpClient _client = null!;
+
+    public async Task InitializeAsync()
+    {
+        await _dbContainer.StartAsync();
+
+        _factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder =>
+            {
+                builder.ConfigureServices(services =>
+                {
+                    services.RemoveAll<DbContextOptions<AppDbContext>>();
+                    services.AddDbContext<AppDbContext>(options =>
+                        options.UseSqlServer(_dbContainer.GetConnectionString()));
+                });
+            });
+
+        _client = _factory.CreateClient();
+    }
+
+    public async Task DisposeAsync()
+    {
+        await _dbContainer.DisposeAsync();
+        await _factory.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task CreateUser_ShouldReturn201()
+    {
+        // Arrange
+        var request = new { Email = "test@example.com", Name = "Test" };
+
+        // Act
+        var response = await _client.PostAsJsonAsync("/api/users", request);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+    }
+}
+```
+
+## Test Quality Standards
+
+- Tests MUST be deterministic and isolated
+- Tests MUST NOT depend on execution order
+- Mock external dependencies in unit tests
+- Use Testcontainers for real database in integration tests
+- Aim for meaningful coverage, not arbitrary percentages
+
+**See also:** `mediator.mdc`, `ef-core.mdc`, `dependencies.mdc`

@@ -1,0 +1,31 @@
+# JetBrains IDEs (IntelliJ IDEA, WebStorm, PhpStorm, etc.)
+.idea/
+*.iml
+*.ipr
+*.iws
+.idea_modules/
+
+# User-specific files
+out/
+
+# CMake
+cmake-build-*/
+
+# File-based project format
+*.ipr
+
+# IntelliJ
+*.iml
+
+# mpeltonen/sbt-idea plugin
+.idea_modules/
+
+# JIRA plugin
+atlassian-ide-plugin.xml
+
+# Crashlytics plugin (for Android Studio and IntelliJ)
+com_crashlytics_export_strings.xml
+crashlytics.properties
+crashlytics-build.properties
+fabric.properties
+

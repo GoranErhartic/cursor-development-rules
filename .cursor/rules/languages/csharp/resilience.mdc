@@ -1,0 +1,109 @@
+---
+description: "Polly resilience patterns - retry, circuit breaker, timeout, bulkhead for HTTP clients"
+globs: ["**/*HttpClient*.cs", "**/Services/**/*.cs", "**/Clients/**/*.cs", "**/Program.cs"]
+---
+
+# Polly Resilience Patterns
+
+## HttpClient with Polly (.NET 10)
+
+```csharp
+builder.Services.AddHttpClient<IPaymentGateway, PaymentGateway>(client =>
+{
+    client.BaseAddress = new Uri(builder.Configuration["PaymentGateway:BaseUrl"]!);
+    client.Timeout = TimeSpan.FromSeconds(30);
+})
+.AddStandardResilienceHandler();
+
+// Or with custom configuration
+builder.Services.AddHttpClient<IExternalApi, ExternalApiClient>()
+    .AddResilienceHandler("custom", builder =>
+    {
+        builder
+            .AddRetry(new HttpRetryStrategyOptions
+            {
+                MaxRetryAttempts = 3,
+                Delay = TimeSpan.FromMilliseconds(500),
+                BackoffType = DelayBackoffType.Exponential,
+                ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
+                    .Handle<HttpRequestException>()
+                    .HandleResult(r => r.StatusCode >= HttpStatusCode.InternalServerError)
+            })
+            .AddCircuitBreaker(new HttpCircuitBreakerStrategyOptions
+            {
+                FailureRatio = 0.5,
+                SamplingDuration = TimeSpan.FromSeconds(10),
+                MinimumThroughput = 5,
+                BreakDuration = TimeSpan.FromSeconds(30)
+            })
+            .AddTimeout(TimeSpan.FromSeconds(10));
+    });
+```
+
+## Resilience Strategies
+
+### Retry
+```csharp
+.AddRetry(new RetryStrategyOptions<HttpResponseMessage>
+{
+    MaxRetryAttempts = 3,
+    Delay = TimeSpan.FromMilliseconds(200),
+    BackoffType = DelayBackoffType.Exponential,
+    UseJitter = true, // Prevents thundering herd
+    OnRetry = args =>
+    {
+        _logger.LogWarning("Retry {Attempt} after {Delay}ms", 
+            args.AttemptNumber, args.RetryDelay.TotalMilliseconds);
+        return ValueTask.CompletedTask;
+    }
+})
+```
+
+### Circuit Breaker
+```csharp
+.AddCircuitBreaker(new CircuitBreakerStrategyOptions<HttpResponseMessage>
+{
+    FailureRatio = 0.5,           // 50% failure rate triggers break
+    SamplingDuration = TimeSpan.FromSeconds(10),
+    MinimumThroughput = 10,       // Minimum requests before evaluating
+    BreakDuration = TimeSpan.FromSeconds(30),
+    OnOpened = args =>
+    {
+        _logger.LogError("Circuit breaker opened for {Duration}", args.BreakDuration);
+        return ValueTask.CompletedTask;
+    }
+})
+```
+
+### Timeout
+```csharp
+.AddTimeout(new TimeoutStrategyOptions
+{
+    Timeout = TimeSpan.FromSeconds(5),
+    OnTimeout = args =>
+    {
+        _logger.LogWarning("Request timed out after {Timeout}", args.Timeout);
+        return ValueTask.CompletedTask;
+    }
+})
+```
+
+## When to Use Each Strategy
+
+| Strategy | Use Case |
+|----------|----------|
+| **Retry** | Transient failures (network blips, 503s) |
+| **Circuit Breaker** | Failing dependencies (prevent cascade) |
+| **Timeout** | Unresponsive services |
+| **Bulkhead** | Isolate resources per operation type |
+| **Rate Limiter** | Respect external API limits |
+
+## Conventions
+
+- ALWAYS use exponential backoff with jitter for retries
+- Configure circuit breakers for all external HTTP calls
+- Set reasonable timeouts (don't rely on default infinite)
+- Log all resilience events for observability
+- Don't retry non-idempotent operations (POST without idempotency key)
+
+**See also:** `logging.mdc`, `error-handling.mdc`, `dependencies.mdc`

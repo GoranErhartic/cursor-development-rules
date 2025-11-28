@@ -1,0 +1,28 @@
+---
+description: "Agent self-improvement - rule retrospectives and improvement proposals"
+alwaysApply: true
+---
+
+# Agent Retrospective Protocol
+
+## End-of-Task Review
+
+After completing any non-trivial task, evaluate:
+
+1. **Rule Effectiveness** - Did existing rules provide sufficient guidance?
+2. **Gaps Encountered** - What was unclear or missing?
+3. **Contradictions** - Did any rules conflict?
+4. **Improvements** - Specific suggestions for rule changes
+
+## Retrospective Format
+
+Include in summary when applicable:
+
+### Rule Observations
+- **Gap:** [Description of missing guidance]
+- **Contradiction:** [Conflicting rules and how resolved]
+- **Proposal:** [Specific improvement suggestion]
+
+## Improvement File
+
+Append significant findings to: `.cursor/rules/IMPROVEMENTS.md`

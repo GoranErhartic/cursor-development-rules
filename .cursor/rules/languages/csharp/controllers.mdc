@@ -1,0 +1,71 @@
+---
+description: "ASP.NET Core controller conventions - routing, ActionResult, API design, HTTP methods"
+globs: ["**/*Controller*.cs", "**/Controllers/**/*.cs", "**/Endpoints/**/*.cs"]
+---
+
+# API Controller Conventions
+
+## Controller Setup
+
+```csharp
+[ApiController]
+[Route("api/[controller]")]
+[Produces("application/json")]
+public class UsersController : ControllerBase
+```
+
+- ALWAYS use `[ApiController]` attribute
+- ALWAYS inherit from `ControllerBase` (not `Controller`)
+- Use `[Route("api/[controller]")]` for consistent routing
+
+## HTTP Methods & Status Codes
+
+| Operation | Method | Success | Error |
+|-----------|--------|---------|-------|
+| Get single | GET | 200 OK / 404 Not Found | — |
+| Get list | GET | 200 OK (empty array if none) | — |
+| Create | POST | 201 Created | 400 Bad Request |
+| Update | PUT | 200 OK / 204 No Content | 404 Not Found |
+| Partial | PATCH | 200 OK | 404 Not Found |
+| Delete | DELETE | 204 No Content | 404 Not Found |
+
+## Return Types
+
+```csharp
+// Single item
+[HttpGet("{id:guid}")]
+public async Task<ActionResult<UserDto>> GetById(Guid id)
+{
+    var result = await _mediator.Send(new GetUserQuery(id));
+    return result.Match<ActionResult<UserDto>>(
+        success => Ok(success),
+        notFound => NotFound());
+}
+
+// Created
+[HttpPost]
+public async Task<ActionResult<UserDto>> Create(CreateUserCommand command)
+{
+    var result = await _mediator.Send(command);
+    return CreatedAtAction(nameof(GetById), new { id = result.Id }, result);
+}
+```
+
+## Conventions
+
+- Use `Guid` for IDs, constrain routes: `{id:guid}`
+- Return `ActionResult<T>` for type safety
+- Use `[FromBody]`, `[FromQuery]`, `[FromRoute]` explicitly
+- Validate via FluentValidation pipeline behavior, not in controllers
+- Return `ProblemDetails` for errors (see `error-handling.mdc`)
+
+## API Versioning
+
+```csharp
+[ApiController]
+[Route("api/v{version:apiVersion}/[controller]")]
+[ApiVersion("1.0")]
+public class UsersController : ControllerBase
+```
+
+**See also:** `request-validation.mdc`, `error-handling.mdc`

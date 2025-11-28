@@ -1,0 +1,218 @@
+---
+description: "Input validation and sanitization rules - SQL injection, XSS, path traversal prevention"
+globs: ["**/*Controller*.java", "**/*Service*.java", "**/*Validator*.java"]
+---
+
+# Input Sanitization
+
+> **All external input is untrusted.** Sanitize at system boundaries.
+
+## Validation vs Sanitization
+
+| Concept | Purpose | Example |
+|---------|---------|---------|
+| **Validation** | Reject invalid input | Email must match pattern |
+| **Sanitization** | Transform to safe form | Strip HTML tags, escape chars |
+
+## String Inputs
+
+```java
+public class StringSanitizer {
+    
+    public static String sanitize(String input, int maxLength) {
+        if (input == null || input.isBlank()) {
+            return "";
+        }
+        
+        return input
+            .trim()
+            .replaceAll("\\p{C}", "") // Remove control characters
+            .substring(0, Math.min(input.length(), maxLength));
+    }
+    
+    public static String sanitizeAlphanumeric(String input) {
+        if (input == null) return "";
+        return input.replaceAll("[^a-zA-Z0-9\\s-]", "");
+    }
+}
+```
+
+Rules:
+- Trim whitespace
+- Enforce maximum length
+- Remove control characters
+- Use allowlist of permitted characters when possible
+
+## SQL Injection Prevention
+
+```java
+// CORRECT - JPA with named parameters
+@Query("SELECT u FROM User u WHERE u.email = :email")
+Optional<User> findByEmail(@Param("email") String email);
+
+// CORRECT - Native query with parameters
+@Query(value = "SELECT * FROM users WHERE email = :email", nativeQuery = true)
+Optional<User> findByEmailNative(@Param("email") String email);
+
+// CORRECT - Criteria API
+CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+CriteriaQuery<User> query = cb.createQuery(User.class);
+Root<User> user = query.from(User.class);
+query.select(user).where(cb.equal(user.get("email"), email));
+
+// NEVER - String concatenation
+@Query(value = "SELECT * FROM users WHERE email = '" + email + "'", nativeQuery = true) // VULNERABLE!
+```
+
+## Path Traversal Prevention
+
+```java
+public class FilePathSanitizer {
+    
+    public static String sanitizeFileName(String fileName) {
+        if (fileName == null || fileName.isBlank()) {
+            throw new IllegalArgumentException("File name cannot be null or blank");
+        }
+        
+        // Remove path separators
+        String sanitized = fileName.replaceAll("[/\\\\]", "");
+        
+        // Remove any remaining dangerous characters
+        sanitized = sanitized.replaceAll("[^a-zA-Z0-9._-]", "");
+        
+        if (sanitized.isBlank()) {
+            throw new IllegalArgumentException("Invalid file name");
+        }
+        
+        return sanitized;
+    }
+    
+    public static boolean isPathSafe(Path basePath, Path requestedPath) {
+        try {
+            Path normalizedBase = basePath.toRealPath();
+            Path normalizedRequested = requestedPath.toRealPath();
+            return normalizedRequested.startsWith(normalizedBase);
+        } catch (IOException e) {
+            return false;
+        }
+    }
+}
+```
+
+## HTML/XSS Prevention
+
+```java
+import org.springframework.web.util.HtmlUtils;
+
+public class HtmlSanitizer {
+    
+    // For displaying user input in HTML context
+    public static String escapeHtml(String input) {
+        if (input == null) return "";
+        return HtmlUtils.htmlEscape(input);
+    }
+    
+    // For stripping all HTML tags
+    public static String stripHtml(String input) {
+        if (input == null) return "";
+        return input.replaceAll("<[^>]*>", "");
+    }
+}
+```
+
+For rich text, use a library like OWASP Java HTML Sanitizer:
+
+```java
+import org.owasp.html.PolicyFactory;
+import org.owasp.html.Sanitizers;
+
+public class RichTextSanitizer {
+    
+    private static final PolicyFactory POLICY = Sanitizers.FORMATTING
+        .and(Sanitizers.LINKS)
+        .and(Sanitizers.BLOCKS);
+    
+    public static String sanitize(String html) {
+        return POLICY.sanitize(html);
+    }
+}
+```
+
+## URL Validation
+
+```java
+import org.springframework.web.util.UriComponentsBuilder;
+
+public class UrlValidator {
+    
+    private static final Set<String> ALLOWED_SCHEMES = Set.of("https");
+    
+    public static boolean isValidUrl(String url) {
+        try {
+            var uri = UriComponentsBuilder.fromUriString(url).build().toUri();
+            return ALLOWED_SCHEMES.contains(uri.getScheme());
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+    
+    public static boolean isValidUrl(String url, Set<String> allowedSchemes) {
+        try {
+            var uri = UriComponentsBuilder.fromUriString(url).build().toUri();
+            return allowedSchemes.contains(uri.getScheme());
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+}
+```
+
+## Bean Validation Integration
+
+```java
+// Custom constraint for sanitized strings
+@Target({ElementType.FIELD, ElementType.PARAMETER})
+@Retention(RetentionPolicy.RUNTIME)
+@Constraint(validatedBy = SanitizedStringValidator.class)
+public @interface SanitizedString {
+    String message() default "String contains invalid characters";
+    int maxLength() default 1000;
+    Class<?>[] groups() default {};
+    Class<? extends Payload>[] payload() default {};
+}
+
+// Validator implementation
+public class SanitizedStringValidator implements ConstraintValidator<SanitizedString, String> {
+    
+    private int maxLength;
+    
+    @Override
+    public void initialize(SanitizedString constraintAnnotation) {
+        this.maxLength = constraintAnnotation.maxLength();
+    }
+    
+    @Override
+    public boolean isValid(String value, ConstraintValidatorContext context) {
+        if (value == null) return true;
+        
+        String sanitized = StringSanitizer.sanitize(value, maxLength);
+        return sanitized.equals(value.trim());
+    }
+}
+
+// Usage
+public record CreateUserRequest(
+    @Email String email,
+    @SanitizedString(maxLength = 100) String name
+) {}
+```
+
+## Common Pitfalls
+
+- ❌ Client-side validation only (always validate server-side)
+- ❌ Blocklisting bad patterns (use allowlists)
+- ❌ Single sanitization for all contexts
+- ❌ Trusting data from your own database (stored XSS)
+- ❌ Using regex for HTML sanitization (use proper library)
+
+**See also:** `security.mdc`, `validation.mdc`

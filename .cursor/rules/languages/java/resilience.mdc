@@ -1,0 +1,248 @@
+---
+description: "Resilience4j patterns - retry, circuit breaker, rate limiter, bulkhead for Spring Boot"
+globs: ["**/*Client*.java", "**/*Service*.java", "**/config/*Resilience*.java"]
+---
+
+# Resilience4j Patterns
+
+## Dependencies
+
+```xml
+<dependency>
+    <groupId>io.github.resilience4j</groupId>
+    <artifactId>resilience4j-spring-boot3</artifactId>
+</dependency>
+
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-aop</artifactId>
+</dependency>
+
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-actuator</artifactId>
+</dependency>
+```
+
+## Configuration (application.yml)
+
+```yaml
+resilience4j:
+  retry:
+    instances:
+      paymentService:
+        max-attempts: 3
+        wait-duration: 500ms
+        exponential-backoff-multiplier: 2
+        retry-exceptions:
+          - org.springframework.web.client.HttpServerErrorException
+          - java.net.SocketTimeoutException
+  
+  circuitbreaker:
+    instances:
+      paymentService:
+        failure-rate-threshold: 50
+        slow-call-rate-threshold: 50
+        slow-call-duration-threshold: 2s
+        permitted-number-of-calls-in-half-open-state: 3
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        wait-duration-in-open-state: 30s
+        automatic-transition-from-open-to-half-open-enabled: true
+  
+  ratelimiter:
+    instances:
+      paymentService:
+        limit-for-period: 10
+        limit-refresh-period: 1s
+        timeout-duration: 0s
+  
+  timelimiter:
+    instances:
+      paymentService:
+        timeout-duration: 5s
+  
+  bulkhead:
+    instances:
+      paymentService:
+        max-concurrent-calls: 5
+        max-wait-duration: 1s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,circuitbreakers,ratelimiters
+  health:
+    circuitbreakers:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+```
+
+## Retry Pattern
+
+```java
+@Service
+public class PaymentService {
+    
+    private final RestTemplate restTemplate;
+    
+    public PaymentService(RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
+    }
+    
+    @Retry(name = "paymentService", fallbackMethod = "paymentFallback")
+    public PaymentResponse processPayment(PaymentRequest request) {
+        return restTemplate.postForObject(
+            "/api/payments",
+            request,
+            PaymentResponse.class
+        );
+    }
+    
+    // Fallback method must have same signature + Throwable parameter
+    private PaymentResponse paymentFallback(PaymentRequest request, Throwable t) {
+        log.error("Payment processing failed, returning fallback", t);
+        return new PaymentResponse("FAILED", "Service temporarily unavailable");
+    }
+}
+```
+
+## Circuit Breaker Pattern
+
+```java
+@Service
+public class ExternalApiClient {
+    
+    private final WebClient webClient;
+    
+    public ExternalApiClient(WebClient.Builder webClientBuilder) {
+        this.webClient = webClientBuilder.baseUrl("https://api.example.com").build();
+    }
+    
+    @CircuitBreaker(name = "paymentService", fallbackMethod = "fallbackResponse")
+    public Mono<ApiResponse> callExternalApi(String endpoint) {
+        return webClient.get()
+            .uri(endpoint)
+            .retrieve()
+            .bodyToMono(ApiResponse.class);
+    }
+    
+    private Mono<ApiResponse> fallbackResponse(String endpoint, Throwable t) {
+        log.warn("Circuit breaker activated for {}, error: {}", endpoint, t.getMessage());
+        return Mono.just(new ApiResponse("Circuit breaker activated"));
+    }
+}
+```
+
+## Rate Limiter Pattern
+
+```java
+@Service
+public class ThirdPartyService {
+    
+    @RateLimiter(name = "paymentService", fallbackMethod = "rateLimitFallback")
+    public String callRateLimitedApi(String request) {
+        // This method will be rate limited
+        return externalApi.call(request);
+    }
+    
+    private String rateLimitFallback(String request, RequestNotPermitted e) {
+        log.warn("Rate limit exceeded for request: {}", request);
+        return "Rate limit exceeded, please try again later";
+    }
+}
+```
+
+## Time Limiter Pattern
+
+```java
+@Service
+public class SlowService {
+    
+    @TimeLimiter(name = "paymentService", fallbackMethod = "timeoutFallback")
+    public CompletableFuture<String> callSlowApi(String request) {
+        return CompletableFuture.supplyAsync(() -> {
+            // Slow operation
+            return externalApi.slowCall(request);
+        });
+    }
+    
+    private CompletableFuture<String> timeoutFallback(String request, TimeoutException e) {
+        log.warn("Request timeout for: {}", request);
+        return CompletableFuture.completedFuture("Request timeout");
+    }
+}
+```
+
+## Bulkhead Pattern
+
+```java
+@Service
+public class ResourceIntensiveService {
+    
+    @Bulkhead(name = "paymentService", type = Bulkhead.Type.SEMAPHORE, fallbackMethod = "bulkheadFallback")
+    public String processRequest(String request) {
+        // Only N concurrent calls allowed
+        return heavyOperation(request);
+    }
+    
+    private String bulkheadFallback(String request, BulkheadFullException e) {
+        log.warn("Bulkhead full for request: {}", request);
+        return "Too many concurrent requests, please try again";
+    }
+}
+```
+
+## Combining Patterns
+
+```java
+@Service
+public class ResilientService {
+    
+    // Order: Retry -> CircuitBreaker -> RateLimiter -> TimeLimiter -> Bulkhead
+    @Retry(name = "paymentService")
+    @CircuitBreaker(name = "paymentService", fallbackMethod = "fallback")
+    @RateLimiter(name = "paymentService")
+    @TimeLimiter(name = "paymentService")
+    @Bulkhead(name = "paymentService")
+    public CompletableFuture<PaymentResponse> processPayment(PaymentRequest request) {
+        return CompletableFuture.supplyAsync(() -> 
+            externalPaymentApi.process(request)
+        );
+    }
+    
+    private CompletableFuture<PaymentResponse> fallback(PaymentRequest request, Throwable t) {
+        log.error("All resilience patterns exhausted", t);
+        return CompletableFuture.completedFuture(
+            new PaymentResponse("FAILED", "Service unavailable")
+        );
+    }
+}
+```
+
+## When to Use Each Strategy
+
+| Strategy | Use Case |
+|----------|----------|
+| **Retry** | Transient failures (network blips, temporary 503s) |
+| **Circuit Breaker** | Failing dependencies (prevent cascade failures) |
+| **Rate Limiter** | Respect external API limits, protect own resources |
+| **Time Limiter** | Unresponsive services, enforce SLAs |
+| **Bulkhead** | Isolate resources per operation type |
+
+## Conventions
+
+- ALWAYS use exponential backoff for retries
+- Configure circuit breakers for all external HTTP calls
+- Set reasonable timeouts (don't rely on defaults)
+- Log all resilience events for observability
+- Use fallback methods for graceful degradation
+- Don't retry non-idempotent operations without idempotency keys
+- Combine patterns in correct order: Retry -> CircuitBreaker -> RateLimiter -> TimeLimiter -> Bulkhead
+
+**See also:** `logging.mdc`, `error-handling.mdc`, `dependencies.mdc`

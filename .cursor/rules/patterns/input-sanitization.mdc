@@ -1,0 +1,238 @@
+---
+description: "Input validation and sanitization - SQL injection, XSS, path traversal prevention concepts"
+---
+
+# Input Sanitization & Validation
+
+> **All external input is untrusted.** Sanitize at system boundaries.
+
+## Validation vs Sanitization
+
+| Concept | Purpose | Example |
+|---------|---------|---------|
+| **Validation** | Reject invalid input | Email must match pattern |
+| **Sanitization** | Transform to safe form | Strip HTML tags, escape chars |
+
+Both are required - validate first, then sanitize.
+
+## Defense in Depth
+
+Apply multiple layers:
+1. **Client-side** - UX feedback (not security)
+2. **API gateway/WAF** - First line of defense
+3. **Application** - Primary validation (REQUIRED)
+4. **Database** - Constraints and types (backup)
+
+## Validation Principles
+
+### Use Allowlists, Not Blocklists
+
+```
+✅ GOOD: Only allow [a-zA-Z0-9-_]
+❌ BAD:  Block known bad patterns (< > ' " etc.)
+```
+
+Blocklists are incomplete - attackers find new patterns.
+
+### Validate Early
+
+- Validate at API boundary (controller/endpoint)
+- Fail fast with clear error messages
+- Don't process invalid input further
+
+### Context-Specific Validation
+
+Different fields need different rules:
+- **Email** - Format, max length, no special chars
+- **Username** - Alphanumeric, length limits
+- **Age** - Numeric, range validation
+- **URL** - Valid scheme, allowed domains
+- **Phone** - Format per region
+
+## Common Attack Vectors
+
+### SQL Injection
+
+**Problem:** Attacker injects SQL code via input
+```sql
+-- User input: ' OR '1'='1
+SELECT * FROM users WHERE email = '' OR '1'='1'
+```
+
+**Solution:** Always use parameterized queries/prepared statements
+```
+❌ NEVER: query = "SELECT * FROM users WHERE email = '" + email + "'"
+✅ ALWAYS: Use ORM or parameterized queries
+```
+
+### Cross-Site Scripting (XSS)
+
+**Problem:** Attacker injects malicious scripts
+```html
+<!-- User input: <script>alert('xss')</script> -->
+<div>Welcome, <script>alert('xss')</script></div>
+```
+
+**Solution:** Escape output based on context
+- **HTML context** - Encode `< > & " '`
+- **JavaScript context** - JSON encode
+- **URL context** - URL encode
+- **CSS context** - CSS escape
+
+### Path Traversal
+
+**Problem:** Attacker accesses unauthorized files
+```
+// User input: ../../etc/passwd
+/files/../../etc/passwd
+```
+
+**Solution:** Validate and normalize paths
+- Remove directory traversal sequences
+- Validate path stays within allowed directory
+- Use allowlist of allowed file names
+
+### Command Injection
+
+**Problem:** Attacker executes system commands
+```bash
+# User input: file.txt; rm -rf /
+cat file.txt; rm -rf /
+```
+
+**Solution:** Avoid system calls with user input
+- Use libraries instead of shell commands
+- If unavoidable, strictly validate and escape
+- Never pass unsanitized input to shell
+
+### LDAP Injection
+
+**Problem:** Attacker modifies LDAP queries
+```
+# User input: *)(uid=*))(|(uid=*
+(&(uid=*)(uid=*))(|(uid=*)(userPassword=secret))
+```
+
+**Solution:** Escape LDAP special characters
+- `,` `\` `#` `+` `<` `>` `;` `"` `=`
+
+### XML Injection
+
+**Problem:** Attacker injects XML entities
+```xml
+<!-- Billion Laughs attack -->
+<!DOCTYPE lolz [
+  <!ENTITY lol "lol">
+  <!ENTITY lol2 "&lol;&lol;">
+  ...
+]>
+```
+
+**Solution:** Disable external entities, validate structure
+
+## Sanitization Guidelines
+
+### String Inputs
+
+1. **Trim whitespace** - Remove leading/trailing spaces
+2. **Normalize** - Unicode normalization (NFC)
+3. **Length limits** - Enforce maximum length
+4. **Character allowlist** - Only permit expected characters
+5. **Remove control characters** - Strip non-printable chars
+
+### Numeric Inputs
+
+1. **Parse to number** - Ensure it's actually numeric
+2. **Range validation** - Min/max bounds
+3. **Precision** - Decimal places for currency
+
+### File Uploads
+
+1. **Validate extension** - Allowlist only (don't trust MIME type)
+2. **Check content** - Verify file header matches extension
+3. **Size limits** - Prevent resource exhaustion
+4. **Rename files** - Don't use user-provided names directly
+5. **Scan for malware** - Use antivirus scanner
+6. **Store outside webroot** - Prevent direct execution
+
+### URLs
+
+1. **Parse and validate** - Use URL parser
+2. **Allowlist schemes** - Only `https` (or `http` for dev)
+3. **Validate domain** - If limiting to specific domains
+4. **Prevent SSRF** - Don't allow localhost, private IPs
+
+## Context-Specific Encoding
+
+### HTML Context
+```
+< becomes &lt;
+> becomes &gt;
+& becomes &amp;
+" becomes &quot;
+' becomes &#x27;
+```
+
+### JavaScript Context
+```
+Use JSON.stringify() or equivalent
+Escape backslash, quotes, control characters
+```
+
+### URL Context
+```
+Use URL encoding (percent encoding)
+Space becomes %20
+```
+
+### SQL Context
+```
+Use parameterized queries - don't encode manually
+```
+
+## Validation Checklist
+
+- [ ] Validate data type (string, number, date)
+- [ ] Validate format (email, phone, URL)
+- [ ] Validate length (min/max)
+- [ ] Validate range (for numbers)
+- [ ] Validate against allowlist (for enums)
+- [ ] Check for required fields
+- [ ] Validate relationships (foreign keys exist)
+- [ ] Business rule validation
+
+## Common Pitfalls
+
+- ❌ Client-side validation only (bypassed easily)
+- ❌ Blocklisting bad patterns (incomplete)
+- ❌ Single sanitization for all contexts (XSS)
+- ❌ Trusting data from your own database (stored XSS)
+- ❌ Regex for complex formats (use libraries)
+- ❌ Double encoding/decoding (security bugs)
+
+## Testing Validation
+
+Include in test suite:
+- Valid inputs (happy path)
+- Invalid formats
+- Boundary values (min, max)
+- Special characters
+- Very long strings
+- Null/empty values
+- Type mismatches
+- Injection attempts
+
+## Conventions
+
+- Validate at the API boundary (first touch point)
+- Fail fast with meaningful error messages
+- Use allowlists over blocklists
+- Sanitize for output context (HTML, JS, SQL)
+- Never trust user input, even after validation
+- Log validation failures (potential attacks)
+- Return generic errors to users (don't leak info)
+
+**See also:** 
+- `patterns/security.mdc` - Overall security principles
+- `languages/*/validation.mdc` - Language-specific validation libraries
+- `languages/*/input-sanitization.mdc` - Implementation details
