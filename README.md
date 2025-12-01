@@ -26,12 +26,37 @@ git clone https://github.com/GoranErhartic/cursor-rules.git
 cd cursor-rules
 ```
 
-### 2. Copy to Your Project
+### 2. Install to Your Project
+
+#### Option A: Automated Installation (Recommended)
+
+**macOS / Linux:**
+
+```bash
+./install.sh /path/to/your/project
+```
+
+**Windows PowerShell:**
+
+```powershell
+.\install.ps1 -TargetPath "C:\Path\To\Your\Project"
+```
+
+The installer will:
+- ✅ Automatically backup existing rules (if any)
+- ✅ Copy all rules to your project
+- ✅ Show clear success/error messages
+
+#### Option B: Manual Installation
 
 Copy the `.cursor` folder to the root of your project:
 
 ```bash
+# macOS / Linux
 cp -r .cursor /path/to/your/project/
+
+# Windows PowerShell
+Copy-Item -Path .cursor -Destination C:\Path\To\Your\Project\ -Recurse
 ```
 
 ### 3. Start Coding
