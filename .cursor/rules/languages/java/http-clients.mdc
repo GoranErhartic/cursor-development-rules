@@ -1,5 +1,5 @@
 ---
-description: "RestClient configuration and usage for calling backend APIs - Spring Boot 3.2+, timeouts, virtual threads"
+description: "RestClient configuration and usage for calling backend APIs - Spring Boot 4+, timeouts, virtual threads"
 globs: ["**/*Client*.java", "**/*ApiClient*.java", "**/client/**/*.java", "**/config/*Client*.java"]
 ---
 
@@ -7,7 +7,7 @@ globs: ["**/*Client*.java", "**/*ApiClient*.java", "**/client/**/*.java", "**/co
 
 ## Overview
 
-**RestClient** is Spring's modern HTTP client introduced in Spring Boot 3.2+. It replaces `RestTemplate` with a fluent, synchronous API that works seamlessly with virtual threads.
+**RestClient** is Spring's modern HTTP client introduced in Spring Boot 3.2+ and fully matured in Spring Boot 4+. It replaces `RestTemplate` with a fluent, synchronous API that works seamlessly with virtual threads.
 
 **When to use:**
 - ✅ BFF layers calling backend APIs

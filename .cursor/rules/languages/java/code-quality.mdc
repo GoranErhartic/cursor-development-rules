@@ -1,11 +1,11 @@
 ---
-description: "Code quality standards - Java 21 LTS idioms, naming conventions, records, sealed classes, virtual threads"
+description: "Code quality standards - Java 25 LTS idioms, naming conventions, records, sealed classes, virtual threads"
 globs: ["**/*.java"]
 ---
 
 # Code Quality Standards
 
-## Java 21 LTS Best Practices
+## Java 25 LTS Best Practices
 
 ### Use Records for DTOs and Value Objects
 ```java
@@ -121,7 +121,7 @@ var query = entityManager.createQuery("SELECT u FROM User u", User.class);
 
 ### Use RestClient for HTTP Calls
 
-**Spring Boot 3.2+ provides RestClient** — a modern, fluent HTTP client that replaces RestTemplate.
+**Spring Boot 4+ provides RestClient** — a modern, fluent HTTP client that replaces RestTemplate.
 
 ```java
 // GOOD - RestClient with builder pattern
@@ -188,7 +188,7 @@ public class HttpClientConfig {
 
 ### Enable Virtual Threads
 
-**Java 21+ with Spring Boot 3.2+** supports virtual threads for improved scalability.
+**Java 25+ with Spring Boot 4+** supports virtual threads for improved scalability.
 
 ```yaml
 # application.yml
