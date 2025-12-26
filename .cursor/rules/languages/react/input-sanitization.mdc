@@ -1,0 +1,610 @@
+---
+description: "Input sanitization - DOMPurify, form sanitization, URL validation, file upload safety"
+globs: ["**/utils/sanitize*.ts", "**/forms/**/*.tsx", "**/*.tsx"]
+---
+
+# Input Sanitization
+
+> **All external input is untrusted.** Sanitize at system boundaries.
+
+## Validation vs Sanitization
+
+| Concept | Purpose | Example |
+|---------|---------|---------|
+| **Validation** | Reject invalid input | Email must match pattern |
+| **Sanitization** | Transform to safe form | Strip HTML tags, escape chars |
+
+**Both are required for security.**
+
+## HTML Sanitization with DOMPurify
+
+### Basic Usage
+```typescript
+import DOMPurify from 'dompurify';
+
+function SafeHTML({ content }: { content: string }) {
+  const sanitized = DOMPurify.sanitize(content);
+  
+  return <div dangerouslySetInnerHTML={{ __html: sanitized }} />;
+}
+```
+
+### Custom Configuration
+```typescript
+import DOMPurify from 'dompurify';
+
+// Strict sanitization
+export function sanitizeHTML(dirty: string): string {
+  return DOMPurify.sanitize(dirty, {
+    ALLOWED_TAGS: ['b', 'i', 'em', 'strong', 'a', 'p', 'br', 'ul', 'ol', 'li'],
+    ALLOWED_ATTR: ['href', 'title'],
+    ALLOW_DATA_ATTR: false,
+    ALLOWED_URI_REGEXP: /^https?:\/\//i,
+  });
+}
+
+// For rich text editors
+export function sanitizeRichText(dirty: string): string {
+  return DOMPurify.sanitize(dirty, {
+    ALLOWED_TAGS: [
+      'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+      'p', 'br', 'hr',
+      'ul', 'ol', 'li',
+      'strong', 'em', 'u', 's',
+      'a', 'img',
+      'blockquote', 'code', 'pre',
+      'table', 'thead', 'tbody', 'tr', 'th', 'td',
+    ],
+    ALLOWED_ATTR: [
+      'href', 'title', 'target', 'rel',
+      'src', 'alt', 'width', 'height',
+    ],
+    ALLOW_DATA_ATTR: false,
+    ALLOWED_URI_REGEXP: /^(?:https?|mailto):/i,
+  });
+}
+
+// Remove all HTML
+export function stripHTML(dirty: string): string {
+  return DOMPurify.sanitize(dirty, {
+    ALLOWED_TAGS: [],
+    ALLOWED_ATTR: [],
+  });
+}
+```
+
+### Component Wrapper
+```typescript
+interface SafeHTMLProps {
+  content: string;
+  mode?: 'strict' | 'rich' | 'strip';
+  className?: string;
+}
+
+export function SafeHTML({ 
+  content, 
+  mode = 'strict', 
+  className 
+}: SafeHTMLProps) {
+  const sanitize = {
+    strict: sanitizeHTML,
+    rich: sanitizeRichText,
+    strip: stripHTML,
+  }[mode];
+
+  const clean = sanitize(content);
+
+  if (mode === 'strip') {
+    return <div className={className}>{clean}</div>;
+  }
+
+  return (
+    <div 
+      className={className}
+      dangerouslySetInnerHTML={{ __html: clean }} 
+    />
+  );
+}
+```
+
+## String Sanitization
+
+### Basic String Sanitizer
+```typescript
+export function sanitizeString(input: string, maxLength = 1000): string {
+  if (!input) return '';
+
+  return input
+    .trim()
+    .normalize('NFC') // Unicode normalization
+    .slice(0, maxLength); // Limit length
+}
+
+export function sanitizeName(name: string): string {
+  return name
+    .trim()
+    .replace(/[^\p{L}\p{N}\s-']/gu, '') // Keep letters, numbers, spaces, hyphens, apostrophes
+    .slice(0, 100);
+}
+
+export function sanitizeEmail(email: string): string {
+  return email.trim().toLowerCase().slice(0, 254);
+}
+
+export function sanitizeUsername(username: string): string {
+  return username
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '')
+    .slice(0, 30);
+}
+```
+
+### Allowlist Approach
+```typescript
+// GOOD - Only allow specific characters
+function sanitizeAlphanumeric(input: string): string {
+  return input.replace(/[^a-zA-Z0-9]/g, '');
+}
+
+function sanitizePhoneNumber(phone: string): string {
+  // Only keep digits, spaces, hyphens, parentheses, and plus
+  return phone.replace(/[^0-9\s\-()+ ]/g, '');
+}
+
+// BAD - Blocklist approach (easy to bypass)
+function unsafeSanitize(input: string): string {
+  return input.replace(/<script>/g, ''); // ❌ Can be bypassed with <Script>, <scr<script>ipt>, etc.
+}
+```
+
+## URL Sanitization
+
+### URL Validator
+```typescript
+export function isValidURL(url: string, allowedProtocols = ['http:', 'https:']): boolean {
+  try {
+    const parsed = new URL(url);
+    return allowedProtocols.includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
+export function sanitizeURL(url: string): string | null {
+  if (!url) return null;
+
+  // Remove whitespace
+  url = url.trim();
+
+  // Validate
+  if (!isValidURL(url)) {
+    return null;
+  }
+
+  return url;
+}
+
+// Safer external link component
+interface ExternalLinkProps {
+  href: string;
+  children: React.ReactNode;
+  className?: string;
+}
+
+export function ExternalLink({ href, children, className }: ExternalLinkProps) {
+  const sanitized = sanitizeURL(href);
+
+  if (!sanitized) {
+    return <span className={className}>{children}</span>;
+  }
+
+  return (
+    <a
+      href={sanitized}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={className}
+    >
+      {children}
+    </a>
+  );
+}
+```
+
+### Preventing Open Redirects
+```typescript
+export function isInternalURL(url: string): boolean {
+  try {
+    const parsed = new URL(url, window.location.origin);
+    return parsed.origin === window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
+export function SafeRedirect({ to }: { to: string }) {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (isInternalURL(to)) {
+      navigate(to);
+    } else {
+      // Log suspicious redirect attempt
+      console.warn('Blocked external redirect:', to);
+      navigate('/');
+    }
+  }, [to, navigate]);
+
+  return <LoadingSpinner />;
+}
+```
+
+## File Upload Sanitization
+
+### File Validator
+```typescript
+interface FileValidationOptions {
+  allowedTypes: string[];
+  maxSize: number; // in bytes
+  allowedExtensions?: string[];
+}
+
+export class FileValidator {
+  constructor(private options: FileValidationOptions) {}
+
+  validate(file: File): { valid: boolean; error?: string } {
+    // Check file type
+    if (!this.options.allowedTypes.includes(file.type)) {
+      return {
+        valid: false,
+        error: `Invalid file type. Allowed: ${this.options.allowedTypes.join(', ')}`,
+      };
+    }
+
+    // Check file size
+    if (file.size > this.options.maxSize) {
+      const maxSizeMB = (this.options.maxSize / (1024 * 1024)).toFixed(2);
+      return {
+        valid: false,
+        error: `File too large. Maximum size: ${maxSizeMB}MB`,
+      };
+    }
+
+    // Check extension
+    if (this.options.allowedExtensions) {
+      const extension = file.name.split('.').pop()?.toLowerCase();
+      if (!extension || !this.options.allowedExtensions.includes(extension)) {
+        return {
+          valid: false,
+          error: `Invalid file extension. Allowed: ${this.options.allowedExtensions.join(', ')}`,
+        };
+      }
+    }
+
+    return { valid: true };
+  }
+
+  sanitizeFilename(filename: string): string {
+    return filename
+      .replace(/[^a-zA-Z0-9._-]/g, '_') // Replace invalid chars with underscore
+      .replace(/\.{2,}/g, '.') // Remove multiple dots
+      .slice(0, 255); // Limit length
+  }
+}
+
+// Usage
+const imageValidator = new FileValidator({
+  allowedTypes: ['image/jpeg', 'image/png', 'image/webp'],
+  maxSize: 5 * 1024 * 1024, // 5MB
+  allowedExtensions: ['jpg', 'jpeg', 'png', 'webp'],
+});
+
+function SecureImageUpload({ onUpload }: { onUpload: (file: File) => Promise<void> }) {
+  const [error, setError] = useState<string | null>(null);
+
+  const handleChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const validation = imageValidator.validate(file);
+    if (!validation.valid) {
+      setError(validation.error!);
+      return;
+    }
+
+    setError(null);
+
+    // Create sanitized file
+    const sanitizedName = imageValidator.sanitizeFilename(file.name);
+    const sanitizedFile = new File([file], sanitizedName, { type: file.type });
+
+    try {
+      await onUpload(sanitizedFile);
+    } catch (err) {
+      setError('Upload failed. Please try again.');
+    }
+  };
+
+  return (
+    <div>
+      <input
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        onChange={handleChange}
+      />
+      {error && <span className="error">{error}</span>}
+    </div>
+  );
+}
+```
+
+## Form Input Sanitization
+
+### Text Input Sanitizer
+```typescript
+interface SanitizedInputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'onChange'> {
+  onChange: (value: string) => void;
+  sanitizer?: (value: string) => string;
+}
+
+export function SanitizedInput({ 
+  onChange, 
+  sanitizer = sanitizeString,
+  ...props 
+}: SanitizedInputProps) {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const sanitized = sanitizer(e.target.value);
+    onChange(sanitized);
+  };
+
+  return <input {...props} onChange={handleChange} />;
+}
+
+// Usage
+function UserForm() {
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+
+  return (
+    <form>
+      <SanitizedInput
+        value={name}
+        onChange={setName}
+        sanitizer={sanitizeName}
+        placeholder="Full Name"
+      />
+      <SanitizedInput
+        value={email}
+        onChange={setEmail}
+        sanitizer={sanitizeEmail}
+        type="email"
+        placeholder="Email"
+      />
+    </form>
+  );
+}
+```
+
+### Textarea Sanitizer
+```typescript
+interface SanitizedTextareaProps extends Omit<React.TextareaHTMLAttributes<HTMLTextAreaElement>, 'onChange'> {
+  onChange: (value: string) => void;
+  maxLength?: number;
+}
+
+export function SanitizedTextarea({ 
+  onChange, 
+  maxLength = 5000,
+  ...props 
+}: SanitizedTextareaProps) {
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const sanitized = sanitizeString(e.target.value, maxLength);
+    onChange(sanitized);
+  };
+
+  return <textarea {...props} onChange={handleChange} maxLength={maxLength} />;
+}
+```
+
+## Path Traversal Prevention
+
+```typescript
+// Prevent directory traversal in file paths
+export function sanitizePath(path: string): string {
+  // Remove any ../ or ..\\ sequences
+  return path
+    .replace(/\.\.[\/\\]/g, '')
+    .replace(/^[\/\\]+/, '') // Remove leading slashes
+    .replace(/[^a-zA-Z0-9._/-]/g, '_'); // Replace invalid chars
+}
+
+export function isPathSafe(basePath: string, requestedPath: string): boolean {
+  try {
+    // Resolve to absolute paths
+    const resolvedBase = path.resolve(basePath);
+    const resolvedPath = path.resolve(basePath, requestedPath);
+
+    // Check if resolved path is within base path
+    return resolvedPath.startsWith(resolvedBase);
+  } catch {
+    return false;
+  }
+}
+```
+
+## Command Injection Prevention
+
+```typescript
+// NEVER pass user input directly to shell commands
+// If absolutely necessary, use strict allowlisting
+
+export function sanitizeCommand(input: string): string | null {
+  // Only allow alphanumeric, hyphen, and underscore
+  const sanitized = input.replace(/[^a-zA-Z0-9_-]/g, '');
+  
+  // Verify nothing was removed
+  if (sanitized !== input) {
+    console.warn('Invalid characters removed from command input');
+    return null;
+  }
+  
+  return sanitized;
+}
+
+// Better: Use allowlist of commands
+const ALLOWED_COMMANDS = ['start', 'stop', 'restart', 'status'] as const;
+type AllowedCommand = typeof ALLOWED_COMMANDS[number];
+
+export function isValidCommand(cmd: string): cmd is AllowedCommand {
+  return ALLOWED_COMMANDS.includes(cmd as AllowedCommand);
+}
+```
+
+## Database Query Safety
+
+```typescript
+// Frontend should NEVER construct SQL queries
+// Always use parameterized API endpoints
+
+// ❌ BAD - Don't do this
+function searchUsers(term: string) {
+  // This would be vulnerable if backend uses it directly in SQL
+  return fetch(`/api/users?search=${term}`);
+}
+
+// ✅ GOOD - Let backend handle parameterization
+async function searchUsers(term: string) {
+  const sanitized = sanitizeString(term, 100);
+  
+  const response = await fetch('/api/users/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query: sanitized }),
+  });
+  
+  return response.json();
+}
+```
+
+## Sanitization Utilities
+
+```typescript
+// utils/sanitize.ts
+export const Sanitize = {
+  string: sanitizeString,
+  name: sanitizeName,
+  email: sanitizeEmail,
+  username: sanitizeUsername,
+  html: sanitizeHTML,
+  richText: sanitizeRichText,
+  stripHtml: stripHTML,
+  url: sanitizeURL,
+  path: sanitizePath,
+  
+  // Remove control characters
+  removeControlChars: (str: string): string => {
+    return str.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
+  },
+  
+  // Remove zero-width characters
+  removeZeroWidth: (str: string): string => {
+    return str.replace(/[\u200B-\u200D\uFEFF]/g, '');
+  },
+  
+  // Normalize whitespace
+  normalizeWhitespace: (str: string): string => {
+    return str.replace(/\s+/g, ' ').trim();
+  },
+};
+```
+
+## Testing Sanitization
+
+```typescript
+// sanitize.test.ts
+import { describe, it, expect } from 'vitest';
+import { sanitizeHTML, sanitizeName } from './sanitize';
+
+describe('sanitizeHTML', () => {
+  it('should remove script tags', () => {
+    const dirty = '<p>Hello</p><script>alert("xss")</script>';
+    const clean = sanitizeHTML(dirty);
+    expect(clean).not.toContain('script');
+    expect(clean).toContain('Hello');
+  });
+
+  it('should remove javascript: URLs', () => {
+    const dirty = '<a href="javascript:alert(1)">Click</a>';
+    const clean = sanitizeHTML(dirty);
+    expect(clean).not.toContain('javascript:');
+  });
+
+  it('should remove event handlers', () => {
+    const dirty = '<div onclick="alert(1)">Click</div>';
+    const clean = sanitizeHTML(dirty);
+    expect(clean).not.toContain('onclick');
+  });
+});
+
+describe('sanitizeName', () => {
+  it('should remove special characters', () => {
+    const name = 'John<script>alert(1)</script>Doe';
+    const sanitized = sanitizeName(name);
+    expect(sanitized).toBe('JohnDoe');
+  });
+
+  it('should trim whitespace', () => {
+    const name = '  John Doe  ';
+    const sanitized = sanitizeName(name);
+    expect(sanitized).toBe('John Doe');
+  });
+
+  it('should limit length', () => {
+    const name = 'a'.repeat(200);
+    const sanitized = sanitizeName(name);
+    expect(sanitized.length).toBe(100);
+  });
+});
+```
+
+## Best Practices
+
+- ✅ Sanitize at system boundaries (API responses, user input)
+- ✅ Use allowlists instead of blocklists
+- ✅ Validate before sanitizing
+- ✅ Use DOMPurify for HTML content
+- ✅ Normalize Unicode strings
+- ✅ Limit input length
+- ✅ Remove control characters
+- ✅ Validate file types and sizes
+- ✅ Sanitize filenames
+- ✅ Test sanitization functions thoroughly
+
+## Anti-Patterns
+
+- ❌ Blocklisting specific patterns (easy to bypass)
+- ❌ Client-side sanitization only (also sanitize on server)
+- ❌ Trusting data from your own database without sanitization
+- ❌ Using regex for HTML sanitization (use DOMPurify)
+- ❌ Not validating before sanitizing
+- ❌ Stripping characters without logging/alerting
+- ❌ Over-sanitizing (removing legitimate data)
+- ❌ Not sanitizing API responses
+- ❌ Forgetting to sanitize error messages
+- ❌ Not testing edge cases
+
+## Sanitization Checklist
+
+- [ ] HTML content sanitized with DOMPurify
+- [ ] User input validated and sanitized
+- [ ] URLs validated before use
+- [ ] File uploads validated (type, size, extension)
+- [ ] Filenames sanitized
+- [ ] Control characters removed
+- [ ] Unicode normalized
+- [ ] Input length limited
+- [ ] API responses validated
+- [ ] Error messages sanitized
+
+**See also:** `security.mdc`, `validation.mdc`, `forms.mdc`, `../../patterns/input-sanitization.mdc`

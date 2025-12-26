@@ -1,0 +1,395 @@
+---
+description: "Code quality standards - TypeScript strict mode, React 19 idioms, naming conventions, hooks rules"
+globs: ["**/*.tsx", "**/*.ts"]
+---
+
+# Code Quality Standards
+
+## TypeScript Strict Mode
+
+### Always Enable Strict Configuration
+```typescript
+// tsconfig.json
+{
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx"
+  }
+}
+```
+
+### Nullable Types
+```typescript
+// GOOD - Explicit nullability
+interface User {
+  name: string;
+  email: string;
+  middleName?: string;  // Optional
+  avatar: string | null; // Explicitly nullable
+}
+
+// BAD - Implicit any
+function getUser(id) { // Missing type
+  return users[id]; // Unchecked indexed access
+}
+```
+
+## React 19 Idioms
+
+### Functional Components with TypeScript
+```typescript
+// GOOD - Explicit props interface
+interface UserCardProps {
+  user: User;
+  onEdit?: (id: string) => void;
+  className?: string;
+}
+
+export function UserCard({ user, onEdit, className }: UserCardProps) {
+  return (
+    <div className={cn('card', className)}>
+      <h3>{user.name}</h3>
+      {onEdit && <button onClick={() => onEdit(user.id)}>Edit</button>}
+    </div>
+  );
+}
+
+// BAD - React.FC is deprecated, no prop validation
+export const UserCard: React.FC = ({ user, onEdit }) => {
+  // ...
+};
+```
+
+### Hooks Rules
+
+```typescript
+// GOOD - Custom hooks follow conventions
+function useUser(userId: string) {
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    
+    fetchUser(userId)
+      .then(data => {
+        if (!cancelled) setUser(data);
+      })
+      .catch(err => {
+        if (!cancelled) setError(err);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [userId]);
+
+  return { user, isLoading, error };
+}
+
+// BAD - Missing cleanup, state updates after unmount
+function useUser(userId: string) {
+  const [user, setUser] = useState<User | null>(null);
+  
+  useEffect(() => {
+    fetchUser(userId).then(setUser); // No cleanup!
+  }, [userId]);
+
+  return user;
+}
+```
+
+### Modern React Patterns (React 19)
+
+```typescript
+// use() hook for promises and context
+function UserProfile({ userPromise }: { userPromise: Promise<User> }) {
+  const user = use(userPromise); // Suspends until resolved
+  return <div>{user.name}</div>;
+}
+
+// useOptimistic for optimistic updates
+function TodoList({ todos }: { todos: Todo[] }) {
+  const [optimisticTodos, addOptimisticTodo] = useOptimistic(
+    todos,
+    (state, newTodo: Todo) => [...state, newTodo]
+  );
+
+  return (
+    <ul>
+      {optimisticTodos.map(todo => (
+        <li key={todo.id}>{todo.title}</li>
+      ))}
+    </ul>
+  );
+}
+
+// useFormStatus for form state
+function SubmitButton() {
+  const { pending } = useFormStatus();
+  return (
+    <button type="submit" disabled={pending}>
+      {pending ? 'Submitting...' : 'Submit'}
+    </button>
+  );
+}
+```
+
+## Naming Conventions
+
+| Element | Convention | Example |
+|---------|------------|---------|
+| Component | PascalCase | `UserProfile` |
+| Hook | use + PascalCase | `useAuth`, `useLocalStorage` |
+| Props Interface | Component + Props | `UserProfileProps` |
+| Event Handler | handle + Event | `handleClick`, `handleSubmit` |
+| Boolean Prop | is/has/can + Adjective | `isLoading`, `hasError`, `canEdit` |
+| Callback Prop | on + Event | `onClick`, `onSubmit`, `onUserUpdate` |
+| File (Component) | PascalCase.tsx | `UserProfile.tsx` |
+| File (Util) | kebab-case.ts | `format-date.ts` |
+| Constants | UPPER_SNAKE_CASE | `MAX_RETRY_COUNT` |
+
+## Component Organization
+
+```typescript
+// File structure order
+// 1. Imports (external, internal, types, styles)
+import { useState, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { Button } from '@/components/ui/Button';
+import type { User } from '@/types';
+
+// 2. Types/Interfaces
+interface UserProfileProps {
+  userId: string;
+  onUpdate?: (user: User) => void;
+}
+
+// 3. Constants
+const FETCH_INTERVAL = 30000;
+
+// 4. Helper functions (or extract to utils)
+function formatUserName(user: User): string {
+  return `${user.firstName} ${user.lastName}`;
+}
+
+// 5. Component
+export function UserProfile({ userId, onUpdate }: UserProfileProps) {
+  // 5a. Hooks
+  const [isEditing, setIsEditing] = useState(false);
+  const { data: user, isLoading } = useQuery({
+    queryKey: ['user', userId],
+    queryFn: () => fetchUser(userId),
+  });
+
+  // 5b. Event handlers
+  const handleEdit = () => {
+    setIsEditing(true);
+  };
+
+  const handleSave = (updatedUser: User) => {
+    onUpdate?.(updatedUser);
+    setIsEditing(false);
+  };
+
+  // 5c. Early returns
+  if (isLoading) return <LoadingSkeleton />;
+  if (!user) return <NotFound />;
+
+  // 5d. Main render
+  return (
+    <div>
+      <h2>{formatUserName(user)}</h2>
+      {isEditing ? (
+        <UserEditForm user={user} onSave={handleSave} />
+      ) : (
+        <UserDetails user={user} onEdit={handleEdit} />
+      )}
+    </div>
+  );
+}
+```
+
+## ESLint Configuration
+
+```typescript
+// eslint.config.js (Flat Config - ESLint 9+)
+import js from '@eslint/js';
+import typescript from '@typescript-eslint/eslint-plugin';
+import tsParser from '@typescript-eslint/parser';
+import react from 'eslint-plugin-react';
+import reactHooks from 'eslint-plugin-react-hooks';
+import jsxA11y from 'eslint-plugin-jsx-a11y';
+
+export default [
+  js.configs.recommended,
+  {
+    files: ['**/*.{ts,tsx}'],
+    languageOptions: {
+      parser: tsParser,
+      parserOptions: {
+        ecmaFeatures: { jsx: true },
+        ecmaVersion: 'latest',
+        sourceType: 'module',
+      },
+    },
+    plugins: {
+      '@typescript-eslint': typescript,
+      'react': react,
+      'react-hooks': reactHooks,
+      'jsx-a11y': jsxA11y,
+    },
+    rules: {
+      // TypeScript
+      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+      '@typescript-eslint/explicit-function-return-type': 'off',
+      '@typescript-eslint/consistent-type-imports': ['error', { prefer: 'type-imports' }],
+      
+      // React
+      'react/react-in-jsx-scope': 'off', // Not needed in React 17+
+      'react/prop-types': 'off', // TypeScript handles this
+      'react/self-closing-comp': 'error',
+      'react/jsx-boolean-value': ['error', 'never'],
+      
+      // Hooks
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
+      
+      // Accessibility
+      'jsx-a11y/alt-text': 'error',
+      'jsx-a11y/aria-props': 'error',
+      'jsx-a11y/aria-proptypes': 'error',
+      'jsx-a11y/aria-unsupported-elements': 'error',
+    },
+  },
+];
+```
+
+## Prettier Configuration
+
+```typescript
+// prettier.config.js
+export default {
+  semi: true,
+  trailingComma: 'es5',
+  singleQuote: true,
+  printWidth: 100,
+  tabWidth: 2,
+  useTabs: false,
+  arrowParens: 'avoid',
+  endOfLine: 'lf',
+  plugins: ['prettier-plugin-tailwindcss'], // Auto-sort Tailwind classes
+};
+```
+
+## Self-Documenting Code
+
+```typescript
+// GOOD - Clear, descriptive names
+function useUserProfileWithPermissions(userId: string) {
+  const { data: user, isLoading } = useQuery(['user', userId], () => fetchUser(userId));
+  const { data: permissions } = useQuery(['permissions', userId], () => fetchPermissions(userId));
+  
+  const canEdit = permissions?.includes('user:edit') ?? false;
+  const canDelete = permissions?.includes('user:delete') ?? false;
+  
+  return { user, isLoading, canEdit, canDelete };
+}
+
+// BAD - Unclear, abbreviated
+function useUP(id: string) {
+  const { data: u, isLoading: l } = useQuery(['u', id], () => fetchUser(id));
+  const { data: p } = useQuery(['p', id], () => fetchPermissions(id));
+  
+  return { u, l, e: p?.includes('user:edit'), d: p?.includes('user:delete') };
+}
+```
+
+## Anti-Patterns to Avoid
+
+- ❌ Using `React.FC` or `React.VFC` (deprecated)
+- ❌ Prop drilling more than 2-3 levels (use context or state management)
+- ❌ Mutating state directly
+- ❌ Missing dependencies in useEffect
+- ❌ Fetching in useEffect instead of using proper data fetching libraries
+- ❌ Inline object/array literals in props (causes unnecessary re-renders)
+- ❌ Default exports (prefer named exports for better refactoring)
+- ❌ `any` type (use `unknown` and type guards)
+- ❌ Non-null assertions (`!`) without proper guards
+- ❌ Large components (>300 lines) - extract smaller components
+- ❌ Business logic in components (extract to hooks or utilities)
+
+## Type Patterns
+
+```typescript
+// Discriminated Unions for State
+type FetchState<T> =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'success'; data: T }
+  | { status: 'error'; error: Error };
+
+function DataDisplay<T>({ state }: { state: FetchState<T> }) {
+  switch (state.status) {
+    case 'idle':
+      return null;
+    case 'loading':
+      return <Spinner />;
+    case 'success':
+      return <div>{JSON.stringify(state.data)}</div>;
+    case 'error':
+      return <ErrorMessage error={state.error} />;
+  }
+}
+
+// Utility Types
+type Optional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
+type RequiredPick<T, K extends keyof T> = Required<Pick<T, K>>;
+
+// Props with children
+interface CardProps {
+  title: string;
+  children: React.ReactNode;
+}
+
+// Ref forwarding
+interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
+  label: string;
+}
+
+const Input = forwardRef<HTMLInputElement, InputProps>(
+  ({ label, ...props }, ref) => {
+    return (
+      <label>
+        {label}
+        <input ref={ref} {...props} />
+      </label>
+    );
+  }
+);
+```
+
+## Boy Scout Rule
+
+> "Always leave the code better than you found it."
+
+- Remove unused imports
+- Fix TypeScript warnings
+- Extract magic numbers to constants
+- Split large components
+- Add missing error boundaries
+
+**See also:** `../../patterns/architecture.mdc`, `testing.mdc`, `components.mdc`

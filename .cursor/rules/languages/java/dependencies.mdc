@@ -16,7 +16,7 @@ Use `<dependencyManagement>` in parent `pom.xml`:
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-dependencies</artifactId>
-            <version>3.2.0</version>
+            <version>3.5.3</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
@@ -25,7 +25,7 @@ Use `<dependencyManagement>` in parent `pom.xml`:
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-dependencies</artifactId>
-            <version>2023.0.0</version>
+            <version>2024.0.4</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
@@ -34,7 +34,7 @@ Use `<dependencyManagement>` in parent `pom.xml`:
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>testcontainers-bom</artifactId>
-            <version>1.19.3</version>
+            <version>1.20.6</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
@@ -97,12 +97,13 @@ mvn org.codehaus.mojo:license-maven-plugin:aggregate-third-party-report
 | Purpose | Package |
 |---------|---------|
 | Web | spring-boot-starter-web |
+| HTTP Client | spring-boot-starter-web (includes RestClient) |
 | Validation | spring-boot-starter-validation |
 | Data | spring-boot-starter-data-jpa |
 | Security | spring-boot-starter-security |
 | Messaging | spring-cloud-stream |
 | Resilience | resilience4j-spring-boot3 |
-| Testing | spring-boot-starter-test, testcontainers |
+| Testing | spring-boot-starter-test, testcontainers, wiremock |
 | Logging | logback-classic (included) |
 | Monitoring | spring-boot-starter-actuator, micrometer-registry-prometheus |
 
@@ -178,6 +179,13 @@ mvn org.codehaus.mojo:license-maven-plugin:aggregate-third-party-report
     <dependency>
         <groupId>org.testcontainers</groupId>
         <artifactId>postgresql</artifactId>
+        <scope>test</scope>
+    </dependency>
+    
+    <dependency>
+        <groupId>org.wiremock</groupId>
+        <artifactId>wiremock-standalone</artifactId>
+        <version>3.10.0</version>
         <scope>test</scope>
     </dependency>
 </dependencies>

@@ -1,0 +1,607 @@
+---
+description: "Zod schemas - runtime validation, type inference, error messages, schema composition"
+globs: ["**/schemas/**/*.ts", "**/validators/**/*.ts", "**/*.ts", "**/*.tsx"]
+---
+
+# Validation with Zod
+
+## Basic Schema Definition
+
+```typescript
+import { z } from 'zod';
+
+// Simple schema
+const userSchema = z.object({
+  name: z.string(),
+  email: z.string().email(),
+  age: z.number().int().positive(),
+});
+
+// Type inference
+type User = z.infer<typeof userSchema>;
+// { name: string; email: string; age: number; }
+
+// Validation
+const result = userSchema.safeParse({
+  name: 'John Doe',
+  email: 'john@example.com',
+  age: 30,
+});
+
+if (result.success) {
+  console.log(result.data); // Typed as User
+} else {
+  console.error(result.error.issues);
+}
+```
+
+## Custom Error Messages
+
+```typescript
+const loginSchema = z.object({
+  email: z
+    .string({ required_error: 'Email is required' })
+    .email('Please enter a valid email address'),
+  password: z
+    .string({ required_error: 'Password is required' })
+    .min(8, 'Password must be at least 8 characters')
+    .max(100, 'Password must be less than 100 characters'),
+});
+```
+
+## Common Patterns
+
+### String Validation
+```typescript
+const stringValidations = z.object({
+  username: z
+    .string()
+    .min(3, 'Username must be at least 3 characters')
+    .max(20, 'Username must be less than 20 characters')
+    .regex(/^[a-zA-Z0-9_]+$/, 'Username can only contain letters, numbers, and underscores'),
+  
+  url: z.string().url('Must be a valid URL'),
+  
+  uuid: z.string().uuid('Must be a valid UUID'),
+  
+  phone: z
+    .string()
+    .regex(/^\+?[1-9]\d{1,14}$/, 'Must be a valid phone number'),
+  
+  trimmed: z.string().trim(),
+  
+  lowercase: z.string().toLowerCase(),
+  
+  nonempty: z.string().min(1, 'This field cannot be empty'),
+});
+```
+
+### Number Validation
+```typescript
+const numberValidations = z.object({
+  age: z
+    .number({ required_error: 'Age is required' })
+    .int('Age must be an integer')
+    .positive('Age must be positive')
+    .min(18, 'Must be at least 18 years old')
+    .max(120, 'Age must be less than 120'),
+  
+  price: z
+    .number()
+    .positive('Price must be positive')
+    .multipleOf(0.01, 'Price must have at most 2 decimal places'),
+  
+  rating: z.number().min(1).max(5),
+});
+```
+
+### Date Validation
+```typescript
+const dateValidations = z.object({
+  birthdate: z
+    .date()
+    .min(new Date('1900-01-01'), 'Date too old')
+    .max(new Date(), 'Date cannot be in the future'),
+  
+  appointmentDate: z
+    .date()
+    .refine(
+      (date) => date > new Date(),
+      'Appointment must be in the future'
+    ),
+  
+  // Parse ISO string to Date
+  createdAt: z.string().datetime().transform((str) => new Date(str)),
+});
+```
+
+### Array Validation
+```typescript
+const arrayValidations = z.object({
+  tags: z
+    .array(z.string())
+    .min(1, 'At least one tag is required')
+    .max(5, 'Maximum 5 tags allowed'),
+  
+  uniqueTags: z
+    .array(z.string())
+    .refine(
+      (arr) => new Set(arr).size === arr.length,
+      'Tags must be unique'
+    ),
+  
+  emails: z
+    .array(z.string().email())
+    .nonempty('At least one email is required'),
+});
+```
+
+### Optional and Nullable
+```typescript
+const optionalSchema = z.object({
+  // Optional field (can be undefined)
+  middleName: z.string().optional(),
+  
+  // Nullable field (can be null)
+  avatar: z.string().url().nullable(),
+  
+  // Nullable and optional (can be undefined or null)
+  bio: z.string().nullish(),
+  
+  // With default value
+  role: z.string().default('user'),
+  
+  // Optional with fallback
+  status: z.enum(['active', 'inactive']).optional().default('active'),
+});
+```
+
+## Schema Composition
+
+### Extending Schemas
+```typescript
+const baseUserSchema = z.object({
+  name: z.string(),
+  email: z.string().email(),
+});
+
+// Extend with additional fields
+const registeredUserSchema = baseUserSchema.extend({
+  password: z.string().min(8),
+  confirmPassword: z.string(),
+}).refine(
+  (data) => data.password === data.confirmPassword,
+  {
+    message: 'Passwords must match',
+    path: ['confirmPassword'],
+  }
+);
+
+// Pick specific fields
+const userLoginSchema = baseUserSchema.pick({
+  email: true,
+}).extend({
+  password: z.string(),
+});
+
+// Omit fields
+const publicUserSchema = baseUserSchema.omit({
+  email: true,
+});
+
+// Partial (all fields optional)
+const updateUserSchema = baseUserSchema.partial();
+
+// Deep partial
+const deepPartialSchema = baseUserSchema.deepPartial();
+```
+
+### Union Types
+```typescript
+// Discriminated union
+const shapeSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('circle'),
+    radius: z.number(),
+  }),
+  z.object({
+    kind: z.literal('rectangle'),
+    width: z.number(),
+    height: z.number(),
+  }),
+]);
+
+type Shape = z.infer<typeof shapeSchema>;
+// { kind: 'circle'; radius: number } | { kind: 'rectangle'; width: number; height: number }
+
+// Simple union
+const idSchema = z.union([
+  z.string().uuid(),
+  z.number().int().positive(),
+]);
+```
+
+### Intersection
+```typescript
+const timestampSchema = z.object({
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+const userSchema = z.object({
+  name: z.string(),
+  email: z.string().email(),
+});
+
+// Combine schemas
+const userWithTimestampSchema = z.intersection(
+  userSchema,
+  timestampSchema
+);
+
+// Or use merge (preferred)
+const mergedSchema = userSchema.merge(timestampSchema);
+```
+
+## Advanced Patterns
+
+### Conditional Validation
+```typescript
+const orderSchema = z.object({
+  type: z.enum(['pickup', 'delivery']),
+  address: z.string().optional(),
+}).refine(
+  (data) => {
+    // Address required for delivery
+    if (data.type === 'delivery') {
+      return !!data.address;
+    }
+    return true;
+  },
+  {
+    message: 'Address is required for delivery orders',
+    path: ['address'],
+  }
+);
+```
+
+### Transform
+```typescript
+const transformSchema = z.object({
+  // Trim and lowercase email
+  email: z.string().email().transform((val) => val.toLowerCase().trim()),
+  
+  // Parse string to number
+  age: z.string().transform((val) => parseInt(val, 10)),
+  
+  // Parse JSON string
+  metadata: z.string().transform((val) => JSON.parse(val)),
+  
+  // Convert to Date
+  birthdate: z.string().datetime().transform((val) => new Date(val)),
+});
+```
+
+### Preprocessing
+```typescript
+const preprocessSchema = z.preprocess(
+  (val) => {
+    // Convert empty string to undefined
+    if (val === '') return undefined;
+    return val;
+  },
+  z.string().optional()
+);
+
+// Parse comma-separated string to array
+const tagsSchema = z.preprocess(
+  (val) => {
+    if (typeof val === 'string') {
+      return val.split(',').map((s) => s.trim());
+    }
+    return val;
+  },
+  z.array(z.string())
+);
+```
+
+### Async Validation
+```typescript
+const asyncUserSchema = z.object({
+  username: z.string().min(3),
+  email: z.string().email(),
+}).refine(
+  async (data) => {
+    // Check if email is unique
+    const exists = await checkEmailExists(data.email);
+    return !exists;
+  },
+  {
+    message: 'Email already exists',
+    path: ['email'],
+  }
+);
+
+// Usage
+async function validateUser(data: unknown) {
+  const result = await asyncUserSchema.safeParseAsync(data);
+  
+  if (!result.success) {
+    console.error(result.error.issues);
+  }
+}
+```
+
+## Custom Refinements
+
+```typescript
+// Password complexity
+const passwordSchema = z
+  .string()
+  .min(8, 'Password must be at least 8 characters')
+  .refine(
+    (password) => /[A-Z]/.test(password),
+    'Password must contain at least one uppercase letter'
+  )
+  .refine(
+    (password) => /[a-z]/.test(password),
+    'Password must contain at least one lowercase letter'
+  )
+  .refine(
+    (password) => /[0-9]/.test(password),
+    'Password must contain at least one number'
+  )
+  .refine(
+    (password) => /[^A-Za-z0-9]/.test(password),
+    'Password must contain at least one special character'
+  );
+
+// Credit card validation
+const creditCardSchema = z.object({
+  number: z
+    .string()
+    .regex(/^\d{16}$/, 'Credit card number must be 16 digits')
+    .refine(
+      (number) => {
+        // Luhn algorithm
+        let sum = 0;
+        let isEven = false;
+        for (let i = number.length - 1; i >= 0; i--) {
+          let digit = parseInt(number[i], 10);
+          if (isEven) {
+            digit *= 2;
+            if (digit > 9) digit -= 9;
+          }
+          sum += digit;
+          isEven = !isEven;
+        }
+        return sum % 10 === 0;
+      },
+      'Invalid credit card number'
+    ),
+  cvv: z.string().regex(/^\d{3,4}$/, 'CVV must be 3 or 4 digits'),
+  expiryDate: z
+    .string()
+    .regex(/^(0[1-9]|1[0-2])\/\d{2}$/, 'Expiry date must be MM/YY')
+    .refine(
+      (date) => {
+        const [month, year] = date.split('/');
+        const expiry = new Date(2000 + parseInt(year, 10), parseInt(month, 10) - 1);
+        return expiry > new Date();
+      },
+      'Card has expired'
+    ),
+});
+```
+
+## Error Handling
+
+```typescript
+// Flatten errors for form display
+const schema = z.object({
+  name: z.string().min(1, 'Name is required'),
+  email: z.string().email('Invalid email'),
+});
+
+const result = schema.safeParse({ name: '', email: 'invalid' });
+
+if (!result.success) {
+  const errors = result.error.flatten();
+  
+  console.log(errors.fieldErrors);
+  // {
+  //   name: ['Name is required'],
+  //   email: ['Invalid email']
+  // }
+}
+
+// Format errors for React Hook Form
+function formatZodErrors(error: z.ZodError) {
+  return error.issues.reduce((acc, issue) => {
+    const path = issue.path.join('.');
+    acc[path] = issue.message;
+    return acc;
+  }, {} as Record<string, string>);
+}
+
+// Custom error map
+const customErrorMap: z.ZodErrorMap = (issue, ctx) => {
+  if (issue.code === z.ZodIssueCode.invalid_type) {
+    if (issue.expected === 'string') {
+      return { message: 'This field must be text' };
+    }
+  }
+  if (issue.code === z.ZodIssueCode.too_small) {
+    if (issue.type === 'string') {
+      return { message: `Must be at least ${issue.minimum} characters` };
+    }
+  }
+  return { message: ctx.defaultError };
+};
+
+z.setErrorMap(customErrorMap);
+```
+
+## React Hook Form Integration
+
+```typescript
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+
+const formSchema = z.object({
+  username: z.string().min(3, 'Username must be at least 3 characters'),
+  email: z.string().email('Invalid email address'),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+  confirmPassword: z.string(),
+}).refine(
+  (data) => data.password === data.confirmPassword,
+  {
+    message: 'Passwords do not match',
+    path: ['confirmPassword'],
+  }
+);
+
+type FormData = z.infer<typeof formSchema>;
+
+function RegistrationForm() {
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+  } = useForm<FormData>({
+    resolver: zodResolver(formSchema),
+  });
+
+  const onSubmit = (data: FormData) => {
+    console.log(data); // Fully validated and typed
+  };
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)}>
+      <input {...register('username')} />
+      {errors.username && <span>{errors.username.message}</span>}
+      
+      <input {...register('email')} type="email" />
+      {errors.email && <span>{errors.email.message}</span>}
+      
+      <input {...register('password')} type="password" />
+      {errors.password && <span>{errors.password.message}</span>}
+      
+      <input {...register('confirmPassword')} type="password" />
+      {errors.confirmPassword && <span>{errors.confirmPassword.message}</span>}
+      
+      <button type="submit">Register</button>
+    </form>
+  );
+}
+```
+
+## API Response Validation
+
+```typescript
+// Define API response schema
+const apiUserSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  email: z.string().email(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+
+const apiUsersListSchema = z.object({
+  users: z.array(apiUserSchema),
+  total: z.number().int().nonnegative(),
+  page: z.number().int().positive(),
+  pageSize: z.number().int().positive(),
+});
+
+type ApiUser = z.infer<typeof apiUserSchema>;
+type ApiUsersList = z.infer<typeof apiUsersListSchema>;
+
+// Validate API response
+async function fetchUsers(page: number): Promise<ApiUsersList> {
+  const response = await fetch(`/api/users?page=${page}`);
+  const data = await response.json();
+  
+  // Validate and parse
+  const result = apiUsersListSchema.safeParse(data);
+  
+  if (!result.success) {
+    console.error('Invalid API response:', result.error);
+    throw new Error('Invalid API response format');
+  }
+  
+  return result.data;
+}
+
+// With TanStack Query
+function useUsers(page: number) {
+  return useQuery({
+    queryKey: ['users', page],
+    queryFn: async () => {
+      const response = await fetch(`/api/users?page=${page}`);
+      const data = await response.json();
+      return apiUsersListSchema.parse(data); // Throws on invalid data
+    },
+  });
+}
+```
+
+## Environment Variables Validation
+
+```typescript
+// env.ts
+import { z } from 'zod';
+
+const envSchema = z.object({
+  NODE_ENV: z.enum(['development', 'production', 'test']),
+  API_URL: z.string().url(),
+  API_KEY: z.string().min(1),
+  PORT: z.string().transform((val) => parseInt(val, 10)).pipe(z.number().int().positive()),
+  ENABLE_ANALYTICS: z
+    .string()
+    .transform((val) => val === 'true')
+    .pipe(z.boolean()),
+});
+
+// Validate on startup
+const env = envSchema.parse(process.env);
+
+// Export typed environment variables
+export { env };
+
+// Usage
+import { env } from './env';
+
+console.log(env.API_URL); // Typed as string (URL validated)
+console.log(env.PORT); // Typed as number
+console.log(env.ENABLE_ANALYTICS); // Typed as boolean
+```
+
+## Best Practices
+
+- ✅ Define schemas at module level for reusability
+- ✅ Use custom error messages for better UX
+- ✅ Leverage type inference with `z.infer`
+- ✅ Validate API responses to ensure type safety
+- ✅ Use discriminated unions for complex types
+- ✅ Compose schemas using `extend`, `merge`, `pick`, `omit`
+- ✅ Use `safeParse` for error handling
+- ✅ Transform data during validation when appropriate
+- ✅ Validate environment variables on startup
+- ✅ Use refinements for complex validation logic
+
+## Anti-Patterns
+
+- ❌ Not providing custom error messages
+- ❌ Validating same data multiple times
+- ❌ Not validating API responses
+- ❌ Using `parse` instead of `safeParse` (throws errors)
+- ❌ Creating overly complex schemas (split into smaller ones)
+- ❌ Not handling validation errors properly
+- ❌ Duplicating validation logic between client and schema
+- ❌ Not using type inference (`z.infer`)
+- ❌ Validating in components instead of at boundaries
+- ❌ Not testing edge cases in validation
+
+**See also:** `forms.mdc`, `input-sanitization.mdc`, `error-handling.mdc`, `../../patterns/input-sanitization.mdc`

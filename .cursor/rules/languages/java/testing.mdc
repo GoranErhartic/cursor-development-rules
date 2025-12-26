@@ -39,6 +39,14 @@ globs: ["**/*Test.java", "**/*Tests.java", "**/test/**/*.java"]
     <artifactId>junit-jupiter</artifactId>
     <scope>test</scope>
 </dependency>
+
+<!-- WireMock for HTTP client testing -->
+<dependency>
+    <groupId>org.wiremock</groupId>
+    <artifactId>wiremock-standalone</artifactId>
+    <version>3.10.0</version>
+    <scope>test</scope>
+</dependency>
 ```
 
 ## Test Structure (AAA Pattern)
@@ -424,6 +432,117 @@ class SecuredUserControllerTest {
 }
 ```
 
+## RestClient Testing with WireMock
+
+### Setup WireMock
+
+```java
+@SpringBootTest
+@ActiveProfiles("test")
+class UserApiClientTest {
+    
+    private WireMockServer wireMockServer;
+    private UserApiClient userApiClient;
+    
+    @BeforeEach
+    void setUp() {
+        wireMockServer = new WireMockServer(WireMockConfiguration.options()
+            .dynamicPort());
+        wireMockServer.start();
+        
+        var restClient = RestClient.builder()
+            .baseUrl(wireMockServer.baseUrl())
+            .build();
+        
+        userApiClient = new UserApiClient(restClient);
+    }
+    
+    @AfterEach
+    void tearDown() {
+        wireMockServer.stop();
+    }
+    
+    @Test
+    void shouldGetUser() {
+        // Arrange
+        var userId = UUID.randomUUID();
+        wireMockServer.stubFor(get(urlEqualTo("/users/" + userId))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("""
+                    {
+                        "id": "%s",
+                        "email": "test@example.com",
+                        "name": "Test User"
+                    }
+                    """.formatted(userId))));
+        
+        // Act
+        var user = userApiClient.getUser(userId);
+        
+        // Assert
+        assertThat(user).isNotNull();
+        assertThat(user.id()).isEqualTo(userId);
+        assertThat(user.email()).isEqualTo("test@example.com");
+        
+        // Verify request was made
+        wireMockServer.verify(getRequestedFor(urlEqualTo("/users/" + userId)));
+    }
+    
+    @Test
+    void shouldHandleNotFound() {
+        // Arrange
+        var userId = UUID.randomUUID();
+        wireMockServer.stubFor(get(urlEqualTo("/users/" + userId))
+            .willReturn(aResponse().withStatus(404)));
+        
+        // Act & Assert
+        assertThatThrownBy(() -> userApiClient.getUser(userId))
+            .isInstanceOf(HttpClientErrorException.class)
+            .hasMessageContaining("404");
+    }
+}
+```
+
+### WireMock with JUnit Extension
+
+```java
+@SpringBootTest
+@WireMockTest(httpPort = 8089)
+class OrderServiceTest {
+    
+    @Autowired
+    private OrderService orderService;
+    
+    @Test
+    void shouldAggregateOrderData(WireMockRuntimeInfo wmRuntimeInfo) {
+        // Stub first backend
+        stubFor(get("/orders/123")
+            .willReturn(ok()
+                .withHeader("Content-Type", "application/json")
+                .withBody("""
+                    {"orderId": "123", "status": "COMPLETED"}
+                    """)));
+        
+        // Stub second backend
+        stubFor(get("/items/123")
+            .willReturn(ok()
+                .withHeader("Content-Type", "application/json")
+                .withBody("""
+                    [{"itemId": "1", "name": "Item 1"}]
+                    """)));
+        
+        // Act
+        var result = orderService.getOrderSummary(UUID.fromString("123"));
+        
+        // Assert
+        assertThat(result.order().status()).isEqualTo("COMPLETED");
+        assertThat(result.items()).hasSize(1);
+    }
+}
+```
+
 ## Parameterized Tests
 
 ```java
@@ -500,8 +619,9 @@ logging:
 - E2E tests: Test full request/response cycle
 - Use `@WebMvcTest` for controller tests (fast, focused)
 - Use `@SpringBootTest` for integration/E2E tests (slower, comprehensive)
+- Use **WireMock** for testing HTTP clients (RestClient, declarative interfaces)
 - ALWAYS clean up test data between tests
 - Use `@Transactional` on test methods for automatic rollback
 - Mock time-dependent code (use `Clock` abstraction)
 
-**See also:** `cqrs.mdc`, `jpa.mdc`, `dependencies.mdc`
+**See also:** `cqrs.mdc`, `jpa.mdc`, `dependencies.mdc`, `http-clients.mdc`

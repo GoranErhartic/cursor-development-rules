@@ -1,9 +1,11 @@
 ---
-description: "Resilience4j patterns - retry, circuit breaker, rate limiter, bulkhead for Spring Boot"
+description: "Resilience4j patterns - retry, circuit breaker, rate limiter, bulkhead for Spring Boot MVC and RestClient"
 globs: ["**/*Client*.java", "**/*Service*.java", "**/config/*Resilience*.java"]
 ---
 
 # Resilience4j Patterns
+
+> **Note:** These patterns work with Spring MVC and RestClient. For reactive applications, see WebFlux-specific resilience patterns.
 
 ## Dependencies
 
@@ -85,23 +87,27 @@ management:
 
 ## Retry Pattern
 
+### With RestClient
+
 ```java
 @Service
 public class PaymentService {
     
-    private final RestTemplate restTemplate;
+    private final RestClient restClient;
     
-    public PaymentService(RestTemplate restTemplate) {
-        this.restTemplate = restTemplate;
+    public PaymentService(RestClient.Builder restClientBuilder) {
+        this.restClient = restClientBuilder
+            .baseUrl("https://payment-api.example.com")
+            .build();
     }
     
     @Retry(name = "paymentService", fallbackMethod = "paymentFallback")
     public PaymentResponse processPayment(PaymentRequest request) {
-        return restTemplate.postForObject(
-            "/api/payments",
-            request,
-            PaymentResponse.class
-        );
+        return restClient.post()
+            .uri("/api/payments")
+            .body(request)
+            .retrieve()
+            .body(PaymentResponse.class);
     }
     
     // Fallback method must have same signature + Throwable parameter
@@ -114,27 +120,68 @@ public class PaymentService {
 
 ## Circuit Breaker Pattern
 
+### With RestClient (Spring MVC)
+
 ```java
 @Service
 public class ExternalApiClient {
     
-    private final WebClient webClient;
+    private final RestClient restClient;
     
-    public ExternalApiClient(WebClient.Builder webClientBuilder) {
-        this.webClient = webClientBuilder.baseUrl("https://api.example.com").build();
+    public ExternalApiClient(RestClient.Builder restClientBuilder) {
+        this.restClient = restClientBuilder
+            .baseUrl("https://api.example.com")
+            .build();
     }
     
     @CircuitBreaker(name = "paymentService", fallbackMethod = "fallbackResponse")
-    public Mono<ApiResponse> callExternalApi(String endpoint) {
-        return webClient.get()
+    public ApiResponse callExternalApi(String endpoint) {
+        return restClient.get()
             .uri(endpoint)
             .retrieve()
-            .bodyToMono(ApiResponse.class);
+            .body(ApiResponse.class);
     }
     
-    private Mono<ApiResponse> fallbackResponse(String endpoint, Throwable t) {
+    private ApiResponse fallbackResponse(String endpoint, Throwable t) {
         log.warn("Circuit breaker activated for {}, error: {}", endpoint, t.getMessage());
-        return Mono.just(new ApiResponse("Circuit breaker activated"));
+        return new ApiResponse("Circuit breaker activated");
+    }
+}
+```
+
+### Circuit Breaker for BFF Aggregation
+
+```java
+@Service
+public class OrderAggregationService {
+    
+    @CircuitBreaker(name = "orderService", fallbackMethod = "orderFallback")
+    public OrderDto getOrder(UUID orderId) {
+        return orderClient.getOrder(orderId);
+    }
+    
+    @CircuitBreaker(name = "inventoryService", fallbackMethod = "inventoryFallback")
+    public List<InventoryItem> getInventory(UUID orderId) {
+        return inventoryClient.getInventory(orderId);
+    }
+    
+    // Fallback methods
+    private OrderDto orderFallback(UUID orderId, Throwable t) {
+        log.warn("Order service unavailable for {}, returning cached data", orderId);
+        return getCachedOrder(orderId).orElse(new OrderDto(orderId, "UNAVAILABLE"));
+    }
+    
+    private List<InventoryItem> inventoryFallback(UUID orderId, Throwable t) {
+        log.warn("Inventory service unavailable for {}", orderId);
+        return List.of(); // Return empty list on failure
+    }
+    
+    // Aggregate with partial failure support
+    public OrderSummary getOrderSummary(UUID orderId) {
+        var order = getOrder(orderId); // May return fallback
+        var inventory = getInventory(orderId); // May return empty list
+        
+        return new OrderSummary(order, inventory);
     }
 }
 ```
@@ -160,16 +207,28 @@ public class ThirdPartyService {
 
 ## Time Limiter Pattern
 
+### With CompletableFuture
+
 ```java
 @Service
 public class SlowService {
     
+    private final RestClient restClient;
+    
+    public SlowService(RestClient.Builder restClientBuilder) {
+        this.restClient = restClientBuilder
+            .baseUrl("https://slow-api.example.com")
+            .build();
+    }
+    
     @TimeLimiter(name = "paymentService", fallbackMethod = "timeoutFallback")
     public CompletableFuture<String> callSlowApi(String request) {
-        return CompletableFuture.supplyAsync(() -> {
-            // Slow operation
-            return externalApi.slowCall(request);
-        });
+        return CompletableFuture.supplyAsync(() -> 
+            restClient.get()
+                .uri("/api/slow/{request}", request)
+                .retrieve()
+                .body(String.class)
+        );
     }
     
     private CompletableFuture<String> timeoutFallback(String request, TimeoutException e) {

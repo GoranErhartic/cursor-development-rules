@@ -1,0 +1,608 @@
+---
+description: "Testing strategy - TDD workflow, Vitest, React Testing Library, AAA pattern, mocking"
+globs: ["**/*.test.tsx", "**/*.test.ts", "**/*.spec.tsx", "**/*.spec.ts", "**/test/**/*.ts", "**/test/**/*.tsx"]
+---
+
+# Testing Strategy
+
+## TDD Workflow (Mandatory)
+
+1. **RED** — Write a failing test first
+2. **GREEN** — Write minimal code to pass
+3. **REFACTOR** — Clean up while tests stay green
+
+**No implementation without tests first.**
+
+## Test Structure (AAA Pattern)
+
+```typescript
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { UserProfile } from './UserProfile';
+
+describe('UserProfile', () => {
+  // Arrange - Setup
+  const mockUser = {
+    id: '123',
+    name: 'John Doe',
+    email: 'john@example.com',
+  };
+
+  it('should display user information when data is loaded', () => {
+    // Arrange
+    render(<UserProfile user={mockUser} />);
+
+    // Act
+    // (No action needed for this test)
+
+    // Assert
+    expect(screen.getByText('John Doe')).toBeInTheDocument();
+    expect(screen.getByText('john@example.com')).toBeInTheDocument();
+  });
+
+  it('should call onEdit when edit button is clicked', async () => {
+    // Arrange
+    const handleEdit = vi.fn();
+    const user = userEvent.setup();
+    render(<UserProfile user={mockUser} onEdit={handleEdit} />);
+
+    // Act
+    await user.click(screen.getByRole('button', { name: /edit/i }));
+
+    // Assert
+    expect(handleEdit).toHaveBeenCalledWith('123');
+    expect(handleEdit).toHaveBeenCalledTimes(1);
+  });
+});
+```
+
+## Naming Convention
+
+```
+{ComponentName/FunctionName}_should_{ExpectedBehavior}_when_{Condition}
+```
+
+Examples:
+- `should display loading spinner when data is fetching`
+- `should show error message when request fails`
+- `should disable submit button when form is invalid`
+- `should call onSubmit with form data when form is submitted`
+
+## Vitest Configuration
+
+```typescript
+// vitest.config.ts
+import { defineConfig } from 'vitest/config';
+import react from '@vitejs/plugin-react';
+import path from 'path';
+
+export default defineConfig({
+  plugins: [react()],
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.ts'],
+    css: true,
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html', 'lcov'],
+      exclude: [
+        'node_modules/',
+        'src/test/',
+        '**/*.d.ts',
+        '**/*.config.*',
+        '**/mockData/',
+        '**/*.test.{ts,tsx}',
+      ],
+    },
+  },
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
+});
+```
+
+```typescript
+// src/test/setup.ts
+import '@testing-library/jest-dom/vitest';
+import { cleanup } from '@testing-library/react';
+import { afterEach } from 'vitest';
+
+// Cleanup after each test
+afterEach(() => {
+  cleanup();
+});
+
+// Mock window.matchMedia
+Object.defineProperty(window, 'matchMedia', {
+  writable: true,
+  value: vi.fn().mockImplementation(query => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })),
+});
+
+// Mock IntersectionObserver
+global.IntersectionObserver = class IntersectionObserver {
+  constructor() {}
+  disconnect() {}
+  observe() {}
+  takeRecords() {
+    return [];
+  }
+  unobserve() {}
+};
+```
+
+## Component Testing Patterns
+
+### Testing User Interactions
+```typescript
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, it, expect } from 'vitest';
+import { LoginForm } from './LoginForm';
+
+describe('LoginForm', () => {
+  it('should submit form with email and password when all fields are valid', async () => {
+    // Arrange
+    const handleSubmit = vi.fn();
+    const user = userEvent.setup();
+    render(<LoginForm onSubmit={handleSubmit} />);
+
+    // Act
+    await user.type(screen.getByLabelText(/email/i), 'test@example.com');
+    await user.type(screen.getByLabelText(/password/i), 'password123');
+    await user.click(screen.getByRole('button', { name: /login/i }));
+
+    // Assert
+    await waitFor(() => {
+      expect(handleSubmit).toHaveBeenCalledWith({
+        email: 'test@example.com',
+        password: 'password123',
+      });
+    });
+  });
+
+  it('should show validation errors when fields are empty', async () => {
+    // Arrange
+    const user = userEvent.setup();
+    render(<LoginForm onSubmit={vi.fn()} />);
+
+    // Act
+    await user.click(screen.getByRole('button', { name: /login/i }));
+
+    // Assert
+    expect(await screen.findByText(/email is required/i)).toBeInTheDocument();
+    expect(await screen.findByText(/password is required/i)).toBeInTheDocument();
+  });
+});
+```
+
+### Testing Async Operations
+```typescript
+import { render, screen, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { UserList } from './UserList';
+import * as api from '@/lib/api';
+
+vi.mock('@/lib/api');
+
+describe('UserList', () => {
+  it('should display users when fetch succeeds', async () => {
+    // Arrange
+    const mockUsers = [
+      { id: '1', name: 'John Doe' },
+      { id: '2', name: 'Jane Smith' },
+    ];
+    vi.mocked(api.fetchUsers).mockResolvedValue(mockUsers);
+
+    // Act
+    render(<UserList />);
+
+    // Assert
+    expect(screen.getByText(/loading/i)).toBeInTheDocument();
+    
+    await waitFor(() => {
+      expect(screen.getByText('John Doe')).toBeInTheDocument();
+      expect(screen.getByText('Jane Smith')).toBeInTheDocument();
+    });
+  });
+
+  it('should show error message when fetch fails', async () => {
+    // Arrange
+    vi.mocked(api.fetchUsers).mockRejectedValue(new Error('Network error'));
+
+    // Act
+    render(<UserList />);
+
+    // Assert
+    await waitFor(() => {
+      expect(screen.getByText(/failed to load users/i)).toBeInTheDocument();
+    });
+  });
+});
+```
+
+### Testing with React Router
+```typescript
+import { render, screen } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router';
+import { describe, it, expect } from 'vitest';
+import { UserDetail } from './UserDetail';
+
+function renderWithRouter(initialRoute = '/') {
+  return render(
+    <MemoryRouter initialEntries={[initialRoute]}>
+      <Routes>
+        <Route path="/users/:id" element={<UserDetail />} />
+      </Routes>
+    </MemoryRouter>
+  );
+}
+
+describe('UserDetail', () => {
+  it('should display user details for the given ID', async () => {
+    // Arrange & Act
+    renderWithRouter('/users/123');
+
+    // Assert
+    await waitFor(() => {
+      expect(screen.getByText(/user details/i)).toBeInTheDocument();
+    });
+  });
+});
+```
+
+### Testing with TanStack Query
+```typescript
+import { render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { UserProfile } from './UserProfile';
+
+function createTestQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false, // Disable retries in tests
+        gcTime: 0,    // Disable caching
+      },
+    },
+  });
+}
+
+function renderWithQueryClient(component: React.ReactElement) {
+  const queryClient = createTestQueryClient();
+  return render(
+    <QueryClientProvider client={queryClient}>
+      {component}
+    </QueryClientProvider>
+  );
+}
+
+describe('UserProfile', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('should fetch and display user data', async () => {
+    // Arrange
+    renderWithQueryClient(<UserProfile userId="123" />);
+
+    // Assert
+    expect(screen.getByText(/loading/i)).toBeInTheDocument();
+    
+    await waitFor(() => {
+      expect(screen.getByText(/john doe/i)).toBeInTheDocument();
+    });
+  });
+});
+```
+
+### Testing Custom Hooks
+```typescript
+import { renderHook, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { useCounter } from './useCounter';
+
+describe('useCounter', () => {
+  it('should initialize with default value', () => {
+    // Arrange & Act
+    const { result } = renderHook(() => useCounter());
+
+    // Assert
+    expect(result.current.count).toBe(0);
+  });
+
+  it('should initialize with provided value', () => {
+    // Arrange & Act
+    const { result } = renderHook(() => useCounter(10));
+
+    // Assert
+    expect(result.current.count).toBe(10);
+  });
+
+  it('should increment count when increment is called', () => {
+    // Arrange
+    const { result } = renderHook(() => useCounter());
+
+    // Act
+    result.current.increment();
+
+    // Assert
+    expect(result.current.count).toBe(1);
+  });
+
+  it('should decrement count when decrement is called', () => {
+    // Arrange
+    const { result } = renderHook(() => useCounter(5));
+
+    // Act
+    result.current.decrement();
+
+    // Assert
+    expect(result.current.count).toBe(4);
+  });
+});
+```
+
+## Testing Zustand Stores
+
+```typescript
+import { describe, it, expect, beforeEach } from 'vitest';
+import { renderHook, act } from '@testing-library/react';
+import { useUserStore } from './userStore';
+
+describe('useUserStore', () => {
+  beforeEach(() => {
+    // Reset store state before each test
+    useUserStore.setState({ user: null, isLoading: false });
+  });
+
+  it('should set user when setUser is called', () => {
+    // Arrange
+    const { result } = renderHook(() => useUserStore());
+    const mockUser = { id: '1', name: 'John Doe' };
+
+    // Act
+    act(() => {
+      result.current.setUser(mockUser);
+    });
+
+    // Assert
+    expect(result.current.user).toEqual(mockUser);
+  });
+
+  it('should clear user when logout is called', () => {
+    // Arrange
+    const { result } = renderHook(() => useUserStore());
+    act(() => {
+      result.current.setUser({ id: '1', name: 'John Doe' });
+    });
+
+    // Act
+    act(() => {
+      result.current.logout();
+    });
+
+    // Assert
+    expect(result.current.user).toBeNull();
+  });
+});
+```
+
+## Mocking Patterns
+
+### Mocking Modules
+```typescript
+// Mock entire module
+vi.mock('@/lib/api', () => ({
+  fetchUser: vi.fn(),
+  updateUser: vi.fn(),
+}));
+
+// Mock with factory
+vi.mock('@/lib/api', async () => {
+  const actual = await vi.importActual('@/lib/api');
+  return {
+    ...actual,
+    fetchUser: vi.fn(),
+  };
+});
+
+// Mock default export
+vi.mock('@/components/Header', () => ({
+  default: () => <div>Mocked Header</div>,
+}));
+```
+
+### Mocking Functions
+```typescript
+// Create mock function
+const mockFn = vi.fn();
+
+// Mock implementation
+const mockFn = vi.fn().mockImplementation((x) => x * 2);
+
+// Mock return value
+const mockFn = vi.fn().mockReturnValue(42);
+
+// Mock resolved promise
+const mockFn = vi.fn().mockResolvedValue({ data: 'success' });
+
+// Mock rejected promise
+const mockFn = vi.fn().mockRejectedValue(new Error('Failed'));
+
+// Mock different return values
+const mockFn = vi
+  .fn()
+  .mockReturnValueOnce(1)
+  .mockReturnValueOnce(2)
+  .mockReturnValue(3);
+```
+
+### Mocking External Libraries
+```typescript
+// Mock localStorage
+const localStorageMock = {
+  getItem: vi.fn(),
+  setItem: vi.fn(),
+  removeItem: vi.fn(),
+  clear: vi.fn(),
+};
+global.localStorage = localStorageMock as any;
+
+// Mock fetch
+global.fetch = vi.fn().mockResolvedValue({
+  ok: true,
+  json: async () => ({ data: 'mocked' }),
+});
+
+// Mock Date
+vi.useFakeTimers();
+vi.setSystemTime(new Date('2024-01-01'));
+```
+
+## Accessibility Testing
+
+```typescript
+import { render } from '@testing-library/react';
+import { axe, toHaveNoViolations } from 'jest-axe';
+import { describe, it, expect } from 'vitest';
+import { Button } from './Button';
+
+expect.extend(toHaveNoViolations);
+
+describe('Button', () => {
+  it('should have no accessibility violations', async () => {
+    // Arrange
+    const { container } = render(<Button>Click me</Button>);
+
+    // Act
+    const results = await axe(container);
+
+    // Assert
+    expect(results).toHaveNoViolations();
+  });
+});
+```
+
+## Test Quality Standards
+
+### DO
+- ✅ Test behavior, not implementation
+- ✅ Use meaningful test descriptions
+- ✅ Follow AAA pattern (Arrange, Act, Assert)
+- ✅ Test edge cases and error states
+- ✅ Keep tests isolated and independent
+- ✅ Use `screen.getByRole` for better accessibility
+- ✅ Clean up after async operations with `waitFor`
+- ✅ Test loading and error states
+- ✅ Mock external dependencies
+
+### DON'T
+- ❌ Test implementation details (internal state, private methods)
+- ❌ Rely on snapshot testing as primary testing method
+- ❌ Write tests that depend on execution order
+- ❌ Use `getByTestId` as the first choice (prefer semantic queries)
+- ❌ Test library code (React, Zustand, etc.)
+- ❌ Leave console errors in tests
+- ❌ Write overly complex tests
+- ❌ Mock everything (integration tests are valuable)
+
+## Query Priority (React Testing Library)
+
+```typescript
+// 1. Accessible to everyone
+screen.getByRole('button', { name: /submit/i });
+screen.getByLabelText(/email/i);
+screen.getByPlaceholderText(/enter email/i);
+screen.getByText(/welcome/i);
+
+// 2. Semantic queries
+screen.getByAltText(/profile picture/i);
+screen.getByTitle(/close/i);
+
+// 3. Test IDs (last resort)
+screen.getByTestId('custom-element');
+```
+
+## Coverage Goals
+
+- **Unit tests** - 80%+ coverage for business logic
+- **Integration tests** - Critical user flows
+- **E2E tests** - Happy paths and critical features
+
+Don't chase 100% coverage — focus on valuable tests.
+
+## Running Tests
+
+```json
+{
+  "scripts": {
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "test:watch": "vitest --watch",
+    "test:coverage": "vitest --coverage",
+    "test:run": "vitest run"
+  }
+}
+```
+
+```bash
+# Run all tests
+pnpm test
+
+# Run tests in watch mode
+pnpm test:watch
+
+# Run tests with UI
+pnpm test:ui
+
+# Run tests with coverage
+pnpm test:coverage
+
+# Run specific test file
+pnpm test UserProfile.test.tsx
+
+# Run tests matching pattern
+pnpm test --grep "should display"
+```
+
+## CI Integration
+
+```yaml
+# .github/workflows/test.yml
+name: Test
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:run
+      - run: pnpm test:coverage
+      - uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage/lcov.info
+```
+
+**See also:** `../../patterns/testing.mdc`, `components.mdc`, `state-management.mdc`, `data-fetching.mdc`

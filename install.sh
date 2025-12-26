@@ -101,3 +101,4 @@ echo "  1. Restart Cursor or reload the workspace"
 echo "  2. The rules will be automatically applied to your AI sessions"
 echo ""
 
+

@@ -1,0 +1,609 @@
+---
+description: "Component design patterns - composition, prop patterns, compound components, render props"
+globs: ["**/components/**/*.tsx", "**/*.tsx"]
+---
+
+# Component Design Patterns
+
+## Component Structure
+
+### Basic Functional Component
+```typescript
+interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: 'primary' | 'secondary' | 'destructive';
+  size?: 'sm' | 'md' | 'lg';
+  isLoading?: boolean;
+}
+
+export function Button({
+  variant = 'primary',
+  size = 'md',
+  isLoading = false,
+  children,
+  className,
+  disabled,
+  ...props
+}: ButtonProps) {
+  return (
+    <button
+      className={cn(
+        'button',
+        variantStyles[variant],
+        sizeStyles[size],
+        className
+      )}
+      disabled={disabled || isLoading}
+      {...props}
+    >
+      {isLoading ? <Spinner size="sm" /> : children}
+    </button>
+  );
+}
+```
+
+## Composition Patterns
+
+### Component Composition (Preferred)
+```typescript
+// GOOD - Flexible composition
+export function Card({ children, className }: CardProps) {
+  return <div className={cn('card', className)}>{children}</div>;
+}
+
+export function CardHeader({ children, className }: CardHeaderProps) {
+  return <div className={cn('card-header', className)}>{children}</div>;
+}
+
+export function CardContent({ children, className }: CardContentProps) {
+  return <div className={cn('card-content', className)}>{children}</div>;
+}
+
+export function CardFooter({ children, className }: CardFooterProps) {
+  return <div className={cn('card-footer', className)}>{children}</div>;
+}
+
+// Usage - Full control
+function UserCard({ user }: { user: User }) {
+  return (
+    <Card>
+      <CardHeader>
+        <h3>{user.name}</h3>
+      </CardHeader>
+      <CardContent>
+        <p>{user.bio}</p>
+      </CardContent>
+      <CardFooter>
+        <Button>View Profile</Button>
+      </CardFooter>
+    </Card>
+  );
+}
+
+// BAD - Monolithic component with too many props
+function Card({ 
+  title, 
+  content, 
+  footer, 
+  showHeader, 
+  headerClassName, 
+  contentClassName 
+}: ComplexCardProps) {
+  // Too rigid, hard to customize
+}
+```
+
+### Compound Components Pattern
+```typescript
+interface TabsContextValue {
+  activeTab: string;
+  setActiveTab: (tab: string) => void;
+}
+
+const TabsContext = createContext<TabsContextValue | null>(null);
+
+function useTabs() {
+  const context = useContext(TabsContext);
+  if (!context) throw new Error('useTabs must be used within Tabs');
+  return context;
+}
+
+export function Tabs({ defaultTab, children }: TabsProps) {
+  const [activeTab, setActiveTab] = useState(defaultTab);
+
+  return (
+    <TabsContext.Provider value={{ activeTab, setActiveTab }}>
+      <div className="tabs">{children}</div>
+    </TabsContext.Provider>
+  );
+}
+
+export function TabsList({ children }: TabsListProps) {
+  return <div className="tabs-list" role="tablist">{children}</div>;
+}
+
+export function TabsTrigger({ value, children }: TabsTriggerProps) {
+  const { activeTab, setActiveTab } = useTabs();
+  
+  return (
+    <button
+      role="tab"
+      aria-selected={activeTab === value}
+      onClick={() => setActiveTab(value)}
+      className={cn('tab-trigger', activeTab === value && 'active')}
+    >
+      {children}
+    </button>
+  );
+}
+
+export function TabsContent({ value, children }: TabsContentProps) {
+  const { activeTab } = useTabs();
+  
+  if (activeTab !== value) return null;
+  
+  return (
+    <div role="tabpanel" className="tabs-content">
+      {children}
+    </div>
+  );
+}
+
+// Usage
+function ProfileTabs() {
+  return (
+    <Tabs defaultTab="profile">
+      <TabsList>
+        <TabsTrigger value="profile">Profile</TabsTrigger>
+        <TabsTrigger value="settings">Settings</TabsTrigger>
+      </TabsList>
+      <TabsContent value="profile">
+        <ProfileForm />
+      </TabsContent>
+      <TabsContent value="settings">
+        <SettingsForm />
+      </TabsContent>
+    </Tabs>
+  );
+}
+```
+
+## Render Props Pattern
+
+```typescript
+interface DataFetcherProps<T> {
+  url: string;
+  children: (state: {
+    data: T | null;
+    isLoading: boolean;
+    error: Error | null;
+  }) => React.ReactNode;
+}
+
+function DataFetcher<T>({ url, children }: DataFetcherProps<T>) {
+  const [data, setData] = useState<T | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  useEffect(() => {
+    fetch(url)
+      .then(res => res.json())
+      .then(setData)
+      .catch(setError)
+      .finally(() => setIsLoading(false));
+  }, [url]);
+
+  return <>{children({ data, isLoading, error })}</>;
+}
+
+// Usage
+function UserProfile() {
+  return (
+    <DataFetcher<User> url="/api/user">
+      {({ data, isLoading, error }) => {
+        if (isLoading) return <Spinner />;
+        if (error) return <ErrorMessage error={error} />;
+        if (!data) return null;
+        return <div>{data.name}</div>;
+      }}
+    </DataFetcher>
+  );
+}
+
+// NOTE: Modern approach is to use custom hooks instead
+function useDataFetch<T>(url: string) {
+  // Same logic, cleaner usage
+}
+```
+
+## Props Patterns
+
+### Props with Discriminated Unions
+```typescript
+// GOOD - Type-safe variants
+type ButtonProps = 
+  | {
+      variant: 'link';
+      href: string;
+      onClick?: never;
+    }
+  | {
+      variant: 'button';
+      onClick: () => void;
+      href?: never;
+    };
+
+function Button(props: ButtonProps) {
+  if (props.variant === 'link') {
+    return <a href={props.href}>{props.children}</a>;
+  }
+  return <button onClick={props.onClick}>{props.children}</button>;
+}
+
+// Usage - TypeScript enforces correct props
+<Button variant="link" href="/home" />        // ✅ Valid
+<Button variant="button" onClick={handleClick} /> // ✅ Valid
+<Button variant="link" onClick={handleClick} />   // ❌ Type error
+```
+
+### Spreading Native Props
+```typescript
+// GOOD - Extend native elements
+interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
+  label: string;
+  error?: string;
+}
+
+export function Input({ label, error, className, ...props }: InputProps) {
+  return (
+    <div className="input-wrapper">
+      <label>{label}</label>
+      <input
+        className={cn('input', error && 'input-error', className)}
+        aria-invalid={!!error}
+        aria-describedby={error ? `${props.id}-error` : undefined}
+        {...props}
+      />
+      {error && (
+        <span id={`${props.id}-error`} className="error">
+          {error}
+        </span>
+      )}
+    </div>
+  );
+}
+```
+
+### Polymorphic Components
+```typescript
+type PolymorphicProps<E extends React.ElementType> = {
+  as?: E;
+  children: React.ReactNode;
+} & Omit<React.ComponentPropsWithoutRef<E>, 'as'>;
+
+export function Text<E extends React.ElementType = 'span'>({
+  as,
+  children,
+  ...props
+}: PolymorphicProps<E>) {
+  const Component = as || 'span';
+  return <Component {...props}>{children}</Component>;
+}
+
+// Usage
+<Text>Default span</Text>
+<Text as="p">Paragraph</Text>
+<Text as="h1" className="heading">Heading</Text>
+```
+
+## Ref Forwarding
+
+```typescript
+interface InputProps {
+  label: string;
+  error?: string;
+}
+
+export const Input = forwardRef<HTMLInputElement, InputProps>(
+  ({ label, error, ...props }, ref) => {
+    return (
+      <div>
+        <label>{label}</label>
+        <input ref={ref} aria-invalid={!!error} {...props} />
+        {error && <span className="error">{error}</span>}
+      </div>
+    );
+  }
+);
+
+Input.displayName = 'Input';
+
+// Usage
+function LoginForm() {
+  const emailRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    emailRef.current?.focus();
+  }, []);
+
+  return <Input ref={emailRef} label="Email" />;
+}
+```
+
+## Higher-Order Components (HOC)
+
+```typescript
+// Use sparingly - prefer hooks for most cases
+function withAuth<P extends object>(
+  Component: React.ComponentType<P>
+): React.ComponentType<P> {
+  return function WithAuthComponent(props: P) {
+    const { user, isLoading } = useAuth();
+
+    if (isLoading) return <Spinner />;
+    if (!user) return <Navigate to="/login" />;
+
+    return <Component {...props} />;
+  };
+}
+
+// Usage
+const ProtectedDashboard = withAuth(Dashboard);
+
+// MODERN ALTERNATIVE - Use hooks and components
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  const { user, isLoading } = useAuth();
+
+  if (isLoading) return <Spinner />;
+  if (!user) return <Navigate to="/login" />;
+
+  return <>{children}</>;
+}
+
+// Usage - More flexible
+function App() {
+  return (
+    <RequireAuth>
+      <Dashboard />
+    </RequireAuth>
+  );
+}
+```
+
+## Controlled vs Uncontrolled Components
+
+```typescript
+// CONTROLLED - Value controlled by React state
+function ControlledInput() {
+  const [value, setValue] = useState('');
+
+  return (
+    <input
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+    />
+  );
+}
+
+// UNCONTROLLED - Value controlled by DOM
+function UncontrolledInput() {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleSubmit = () => {
+    console.log(inputRef.current?.value);
+  };
+
+  return <input ref={inputRef} defaultValue="" />;
+}
+
+// HYBRID - Support both patterns
+interface FlexibleInputProps {
+  value?: string;
+  defaultValue?: string;
+  onChange?: (value: string) => void;
+}
+
+function FlexibleInput({ 
+  value: controlledValue, 
+  defaultValue,
+  onChange 
+}: FlexibleInputProps) {
+  const [uncontrolledValue, setUncontrolledValue] = useState(defaultValue ?? '');
+  const isControlled = controlledValue !== undefined;
+  const value = isControlled ? controlledValue : uncontrolledValue;
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newValue = e.target.value;
+    if (!isControlled) setUncontrolledValue(newValue);
+    onChange?.(newValue);
+  };
+
+  return <input value={value} onChange={handleChange} />;
+}
+```
+
+## Suspense and Error Boundaries
+
+```typescript
+// Error Boundary
+interface ErrorBoundaryProps {
+  fallback?: React.ReactNode;
+  children: React.ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+export class ErrorBoundary extends React.Component<
+  ErrorBoundaryProps,
+  ErrorBoundaryState
+> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error('Error caught by boundary:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback || <ErrorFallback error={this.state.error} />;
+    }
+
+    return this.props.children;
+  }
+}
+
+// Suspense Wrapper
+function DataDisplay() {
+  return (
+    <ErrorBoundary fallback={<ErrorMessage />}>
+      <Suspense fallback={<LoadingSkeleton />}>
+        <UserProfile />
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
+```
+
+## Component Size Guidelines
+
+### When to Split Components
+
+```typescript
+// TOO LARGE - Over 300 lines, multiple responsibilities
+function Dashboard() {
+  // 500+ lines of mixed logic
+}
+
+// GOOD - Split by responsibility
+function Dashboard() {
+  return (
+    <div>
+      <DashboardHeader />
+      <DashboardStats />
+      <DashboardCharts />
+      <DashboardActivity />
+    </div>
+  );
+}
+
+function DashboardHeader() {
+  // 50 lines - single responsibility
+}
+```
+
+### Single Responsibility Principle
+
+```typescript
+// BAD - Multiple responsibilities
+function UserCard({ user }: { user: User }) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [formData, setFormData] = useState(user);
+  
+  // Validation logic
+  const validate = () => { /* ... */ };
+  
+  // API calls
+  const saveUser = async () => { /* ... */ };
+  
+  // Rendering logic for view and edit modes
+  return (
+    <div>
+      {/* 200+ lines */}
+    </div>
+  );
+}
+
+// GOOD - Separated concerns
+function UserCard({ user }: { user: User }) {
+  const [isEditing, setIsEditing] = useState(false);
+  
+  return (
+    <Card>
+      {isEditing ? (
+        <UserEditForm user={user} onClose={() => setIsEditing(false)} />
+      ) : (
+        <UserDisplay user={user} onEdit={() => setIsEditing(true)} />
+      )}
+    </Card>
+  );
+}
+```
+
+## Performance Patterns
+
+```typescript
+// Memoized component - prevents unnecessary re-renders
+export const ExpensiveComponent = memo(function ExpensiveComponent({ 
+  data 
+}: { data: Data }) {
+  // Expensive rendering logic
+  return <div>{/* ... */}</div>;
+});
+
+// Memoized callback
+function Parent() {
+  const [count, setCount] = useState(0);
+  
+  // Won't cause Child to re-render when Parent re-renders
+  const handleClick = useCallback(() => {
+    console.log('clicked');
+  }, []); // Only created once
+
+  return <Child onClick={handleClick} />;
+}
+
+// Memoized value
+function DataDisplay({ items }: { items: Item[] }) {
+  const sortedItems = useMemo(
+    () => items.slice().sort((a, b) => a.name.localeCompare(b.name)),
+    [items]
+  );
+
+  return <List items={sortedItems} />;
+}
+```
+
+## Anti-Patterns to Avoid
+
+- ❌ Prop drilling more than 2-3 levels (use context or state management)
+- ❌ Business logic in components (extract to hooks or services)
+- ❌ Inline object/array literals as props (causes re-renders)
+- ❌ Too many props (>7-8 props suggests wrong abstraction)
+- ❌ Boolean props for variants (use discriminated unions)
+- ❌ Generic names (e.g., `Container`, `Wrapper`, `Component`)
+- ❌ Mixing controlled and uncontrolled without explicit handling
+- ❌ Mutating props
+- ❌ Using indexes as keys in lists
+- ❌ Too many useEffect hooks in one component
+
+## File Organization
+
+```
+components/
+├── ui/                    # Reusable UI components
+│   ├── Button.tsx
+│   ├── Input.tsx
+│   └── Card.tsx
+├── features/              # Feature-specific components
+│   ├── users/
+│   │   ├── UserCard.tsx
+│   │   ├── UserList.tsx
+│   │   └── UserEditForm.tsx
+│   └── posts/
+│       ├── PostCard.tsx
+│       └── PostList.tsx
+└── layouts/               # Layout components
+    ├── MainLayout.tsx
+    └── AuthLayout.tsx
+```
+
+**See also:** `code-quality.mdc`, `state-management.mdc`, `performance.mdc`, `../../patterns/architecture.mdc`

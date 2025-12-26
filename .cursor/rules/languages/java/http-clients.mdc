@@ -1,0 +1,581 @@
+---
+description: "RestClient configuration and usage for calling backend APIs - Spring Boot 3.2+, timeouts, virtual threads"
+globs: ["**/*Client*.java", "**/*ApiClient*.java", "**/client/**/*.java", "**/config/*Client*.java"]
+---
+
+# HTTP Clients with RestClient
+
+## Overview
+
+**RestClient** is Spring's modern HTTP client introduced in Spring Boot 3.2+. It replaces `RestTemplate` with a fluent, synchronous API that works seamlessly with virtual threads.
+
+**When to use:**
+- ✅ BFF layers calling backend APIs
+- ✅ Microservice-to-microservice communication
+- ✅ Third-party API integration
+- ✅ Spring MVC applications (non-reactive)
+
+**When NOT to use:**
+- ❌ Reactive applications (use `WebClient` instead)
+
+## Basic RestClient Usage
+
+### Simple GET Request
+
+```java
+@Service
+public class UserService {
+    
+    private final RestClient restClient;
+    
+    public UserService(RestClient.Builder restClientBuilder) {
+        this.restClient = restClientBuilder
+            .baseUrl("https://api.example.com")
+            .build();
+    }
+    
+    public UserDto getUser(UUID userId) {
+        return restClient.get()
+            .uri("/users/{id}", userId)
+            .retrieve()
+            .body(UserDto.class);
+    }
+}
+```
+
+### POST Request with Body
+
+```java
+public UserDto createUser(CreateUserRequest request) {
+    return restClient.post()
+        .uri("/users")
+        .contentType(MediaType.APPLICATION_JSON)
+        .body(request)
+        .retrieve()
+        .body(UserDto.class);
+}
+```
+
+### PUT and DELETE
+
+```java
+public UserDto updateUser(UUID userId, UpdateUserRequest request) {
+    return restClient.put()
+        .uri("/users/{id}", userId)
+        .contentType(MediaType.APPLICATION_JSON)
+        .body(request)
+        .retrieve()
+        .body(UserDto.class);
+}
+
+public void deleteUser(UUID userId) {
+    restClient.delete()
+        .uri("/users/{id}", userId)
+        .retrieve()
+        .toBodilessEntity();
+}
+```
+
+## RestClient Configuration
+
+### Global RestClient Configuration
+
+```java
+@Configuration
+public class HttpClientConfig {
+    
+    @Bean
+    public RestClient.Builder restClientBuilder(
+            ClientHttpRequestFactoryBuilder<?> clientHttpRequestFactoryBuilder) {
+        
+        // Configure timeouts and SSL
+        var settings = ClientHttpRequestFactorySettings.defaults()
+            .withConnectTimeout(Duration.ofSeconds(5))
+            .withReadTimeout(Duration.ofSeconds(30));
+        
+        var requestFactory = clientHttpRequestFactoryBuilder.build(settings);
+        
+        return RestClient.builder()
+            .requestFactory(requestFactory)
+            .defaultHeader("Accept", "application/json")
+            .defaultHeader("User-Agent", "BFF-Service/1.0");
+    }
+}
+```
+
+### Service-Specific RestClient Beans
+
+```java
+@Configuration
+public class BackendClientsConfig {
+    
+    @Bean
+    public RestClient orderApiClient(RestClient.Builder builder) {
+        return builder
+            .baseUrl("${backend.order-api.url}")
+            .defaultHeader("X-Client-Id", "bff-service")
+            .build();
+    }
+    
+    @Bean
+    public RestClient inventoryApiClient(RestClient.Builder builder) {
+        return builder
+            .baseUrl("${backend.inventory-api.url}")
+            .defaultHeader("X-Client-Id", "bff-service")
+            .build();
+    }
+}
+```
+
+### Configuration Properties
+
+```yaml
+# application.yml
+backend:
+  order-api:
+    url: https://order-service.example.com
+  inventory-api:
+    url: https://inventory-service.example.com
+
+spring:
+  http:
+    client:
+      connect-timeout: 5s
+      read-timeout: 30s
+      redirects: dont-follow
+  
+  threads:
+    virtual:
+      enabled: true  # Enable virtual threads for blocking I/O
+```
+
+## Declarative HTTP Interface
+
+**Best Practice for BFF:** Use declarative interfaces for cleaner, type-safe HTTP clients.
+
+### Define Interface
+
+```java
+public interface OrderApiClient {
+    
+    @GetExchange("/orders/{id}")
+    OrderDto getOrder(@PathVariable UUID id);
+    
+    @GetExchange("/orders/user/{userId}")
+    List<OrderDto> getUserOrders(@PathVariable UUID userId);
+    
+    @PostExchange("/orders")
+    OrderDto createOrder(@RequestBody CreateOrderRequest request);
+    
+    @PutExchange("/orders/{id}")
+    OrderDto updateOrder(@PathVariable UUID id, @RequestBody UpdateOrderRequest request);
+    
+    @DeleteExchange("/orders/{id}")
+    void deleteOrder(@PathVariable UUID id);
+    
+    @GetExchange("/orders")
+    Page<OrderDto> searchOrders(
+        @RequestParam(required = false) String status,
+        @RequestParam(defaultValue = "0") int page,
+        @RequestParam(defaultValue = "20") int size
+    );
+}
+```
+
+### Register as Bean
+
+```java
+@Configuration
+public class HttpInterfaceConfig {
+    
+    @Bean
+    public OrderApiClient orderApiClient(
+            @Qualifier("orderApiRestClient") RestClient restClient) {
+        
+        var factory = HttpServiceProxyFactory
+            .builderFor(RestClientAdapter.create(restClient))
+            .build();
+        
+        return factory.createClient(OrderApiClient.class);
+    }
+    
+    @Bean
+    @Qualifier("orderApiRestClient")
+    public RestClient orderApiRestClient(RestClient.Builder builder) {
+        return builder
+            .baseUrl("${backend.order-api.url}")
+            .build();
+    }
+}
+```
+
+### Using Declarative Clients
+
+```java
+@Service
+public class OrderAggregationService {
+    
+    private final OrderApiClient orderClient;
+    
+    public OrderAggregationService(OrderApiClient orderClient) {
+        this.orderClient = orderClient;
+    }
+    
+    public OrderDto getOrder(UUID orderId) {
+        // Clean, simple call
+        return orderClient.getOrder(orderId);
+    }
+    
+    public List<OrderDto> getUserOrders(UUID userId) {
+        return orderClient.getUserOrders(userId);
+    }
+}
+```
+
+## Error Handling
+
+### Basic Error Handling
+
+```java
+public UserDto getUser(UUID userId) {
+    return restClient.get()
+        .uri("/users/{id}", userId)
+        .retrieve()
+        .onStatus(HttpStatusCode::is4xxClientError, (request, response) -> {
+            if (response.getStatusCode().value() == 404) {
+                throw new UserNotFoundException(userId);
+            }
+            throw new ClientException("Client error: " + response.getStatusCode());
+        })
+        .onStatus(HttpStatusCode::is5xxServerError, (request, response) -> {
+            throw new BackendServiceException("Backend service error");
+        })
+        .body(UserDto.class);
+}
+```
+
+### Custom Error Handler
+
+```java
+@Component
+public class RestClientErrorHandler {
+    
+    public void handleError(HttpRequest request, ClientHttpResponse response) throws IOException {
+        var statusCode = response.getStatusCode();
+        var statusText = response.getStatusText();
+        
+        if (statusCode.is4xxClientError()) {
+            if (statusCode.value() == 404) {
+                throw new ResourceNotFoundException("Resource not found");
+            } else if (statusCode.value() == 401) {
+                throw new UnauthorizedException("Unauthorized");
+            }
+            throw new ClientException("Client error: " + statusCode + " " + statusText);
+        }
+        
+        if (statusCode.is5xxServerError()) {
+            throw new BackendServiceException(
+                "Backend service error: " + statusCode + " " + statusText
+            );
+        }
+    }
+}
+
+// Usage
+@Bean
+public RestClient.Builder restClientBuilder(RestClientErrorHandler errorHandler) {
+    return RestClient.builder()
+        .defaultStatusHandler(
+            HttpStatusCode::isError,
+            errorHandler::handleError
+        );
+}
+```
+
+## Request/Response Interceptors
+
+### Token Propagation Interceptor
+
+```java
+@Component
+public class TokenPropagationInterceptor implements ClientHttpRequestInterceptor {
+    
+    private static final Logger log = LoggerFactory.getLogger(TokenPropagationInterceptor.class);
+    
+    @Override
+    public ClientHttpResponse intercept(
+            HttpRequest request,
+            byte[] body,
+            ClientHttpRequestExecution execution) throws IOException {
+        
+        // Extract JWT from SecurityContext
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        
+        if (authentication instanceof JwtAuthenticationToken jwtAuth) {
+            var token = jwtAuth.getToken().getTokenValue();
+            request.getHeaders().setBearerAuth(token);
+            log.debug("Propagating JWT token to {}", request.getURI());
+        }
+        
+        return execution.execute(request, body);
+    }
+}
+
+@Configuration
+public class HttpClientConfig {
+    
+    @Bean
+    public RestClient.Builder restClientBuilder(TokenPropagationInterceptor interceptor) {
+        return RestClient.builder()
+            .requestInterceptor(interceptor);
+    }
+}
+```
+
+### Logging Interceptor
+
+```java
+@Component
+public class HttpLoggingInterceptor implements ClientHttpRequestInterceptor {
+    
+    private static final Logger log = LoggerFactory.getLogger(HttpLoggingInterceptor.class);
+    
+    @Override
+    public ClientHttpResponse intercept(
+            HttpRequest request,
+            byte[] body,
+            ClientHttpRequestExecution execution) throws IOException {
+        
+        var startTime = System.currentTimeMillis();
+        
+        log.info("Outgoing HTTP request: {} {}", request.getMethod(), request.getURI());
+        
+        ClientHttpResponse response = null;
+        try {
+            response = execution.execute(request, body);
+            return response;
+        } finally {
+            var duration = System.currentTimeMillis() - startTime;
+            var statusCode = response != null ? response.getStatusCode().value() : 0;
+            
+            log.info("HTTP response: {} {} - Status: {} - Duration: {}ms",
+                request.getMethod(),
+                request.getURI(),
+                statusCode,
+                duration);
+        }
+    }
+}
+```
+
+### Correlation ID Interceptor
+
+```java
+@Component
+public class CorrelationIdInterceptor implements ClientHttpRequestInterceptor {
+    
+    private static final String CORRELATION_ID_HEADER = "X-Correlation-Id";
+    
+    @Override
+    public ClientHttpResponse intercept(
+            HttpRequest request,
+            byte[] body,
+            ClientHttpRequestExecution execution) throws IOException {
+        
+        // Get correlation ID from MDC
+        var correlationId = MDC.get("correlationId");
+        
+        if (correlationId != null) {
+            request.getHeaders().set(CORRELATION_ID_HEADER, correlationId);
+        }
+        
+        return execution.execute(request, body);
+    }
+}
+```
+
+## Timeouts and Connection Pooling
+
+### Per-Client Timeouts
+
+```java
+@Bean
+public RestClient orderApiClient(RestClient.Builder builder) {
+    var settings = ClientHttpRequestFactorySettings.defaults()
+        .withConnectTimeout(Duration.ofSeconds(3))
+        .withReadTimeout(Duration.ofSeconds(15));
+    
+    var requestFactory = ClientHttpRequestFactoryBuilder.detect().build(settings);
+    
+    return builder
+        .baseUrl("${backend.order-api.url}")
+        .requestFactory(requestFactory)
+        .build();
+}
+```
+
+### Connection Pool Configuration (Apache HttpClient)
+
+```xml
+<!-- Add Apache HttpClient dependency for advanced connection pooling -->
+<dependency>
+    <groupId>org.apache.httpcomponents.client5</groupId>
+    <artifactId>httpclient5</artifactId>
+</dependency>
+```
+
+```java
+@Configuration
+public class HttpClientConfig {
+    
+    @Bean
+    public ClientHttpRequestFactory clientHttpRequestFactory() {
+        var connectionManager = PoolingHttpClientConnectionManagerBuilder.create()
+            .setMaxConnTotal(100)                  // Max total connections
+            .setMaxConnPerRoute(20)                // Max per route
+            .setDefaultConnectionConfig(
+                ConnectionConfig.custom()
+                    .setConnectTimeout(5, TimeUnit.SECONDS)
+                    .setSocketTimeout(30, TimeUnit.SECONDS)
+                    .build()
+            )
+            .build();
+        
+        var httpClient = HttpClients.custom()
+            .setConnectionManager(connectionManager)
+            .evictIdleConnections(30L, TimeUnit.SECONDS)
+            .build();
+        
+        return new HttpComponentsClientHttpRequestFactory(httpClient);
+    }
+    
+    @Bean
+    public RestClient.Builder restClientBuilder(ClientHttpRequestFactory requestFactory) {
+        return RestClient.builder()
+            .requestFactory(requestFactory);
+    }
+}
+```
+
+## SSL/TLS Configuration
+
+### Custom SSL Bundle
+
+```yaml
+# application.yml
+spring:
+  ssl:
+    bundle:
+      jks:
+        backend-api:
+          keystore:
+            location: classpath:keystore.jks
+            password: ${KEYSTORE_PASSWORD}
+            type: JKS
+          truststore:
+            location: classpath:truststore.jks
+            password: ${TRUSTSTORE_PASSWORD}
+            type: JKS
+```
+
+```java
+@Bean
+public RestClient secureApiClient(
+        RestClient.Builder builder,
+        SslBundles sslBundles) {
+    
+    var settings = ClientHttpRequestFactorySettings.defaults()
+        .withSslBundle(sslBundles.getBundle("backend-api"));
+    
+    var requestFactory = ClientHttpRequestFactoryBuilder.detect().build(settings);
+    
+    return builder
+        .baseUrl("${backend.secure-api.url}")
+        .requestFactory(requestFactory)
+        .build();
+}
+```
+
+## Headers and Authentication
+
+### Dynamic Headers
+
+```java
+public OrderDto getOrder(UUID orderId, String tenantId) {
+    return restClient.get()
+        .uri("/orders/{id}", orderId)
+        .header("X-Tenant-Id", tenantId)
+        .header("X-Request-Id", UUID.randomUUID().toString())
+        .retrieve()
+        .body(OrderDto.class);
+}
+```
+
+### Basic Authentication
+
+```java
+@Bean
+public RestClient legacyApiClient(RestClient.Builder builder) {
+    var username = environment.getProperty("legacy-api.username");
+    var password = environment.getProperty("legacy-api.password");
+    
+    return builder
+        .baseUrl("${legacy-api.url}")
+        .defaultHeaders(headers -> 
+            headers.setBasicAuth(username, password)
+        )
+        .build();
+}
+```
+
+## Virtual Threads Integration
+
+**RestClient works seamlessly with virtual threads** — no special configuration needed.
+
+```java
+@Service
+public class OrderService {
+    
+    private final RestClient restClient;
+    
+    // When virtual threads are enabled, blocking I/O is efficient
+    public OrderDto getOrder(UUID orderId) {
+        // This blocks, but on a virtual thread it's fine
+        return restClient.get()
+            .uri("/orders/{id}", orderId)
+            .retrieve()
+            .body(OrderDto.class);
+    }
+    
+    // Parallel calls with virtual threads
+    public OrderSummary getOrderSummary(UUID orderId) {
+        // Both execute in parallel on virtual threads
+        var orderFuture = CompletableFuture.supplyAsync(
+            () -> orderClient.getOrder(orderId)
+        );
+        
+        var itemsFuture = CompletableFuture.supplyAsync(
+            () -> itemClient.getItems(orderId)
+        );
+        
+        CompletableFuture.allOf(orderFuture, itemsFuture).join();
+        
+        return new OrderSummary(orderFuture.join(), itemsFuture.join());
+    }
+}
+```
+
+## Conventions
+
+- ALWAYS use `RestClient`, NOT `RestTemplate` (deprecated)
+- Use **declarative HTTP interfaces** for BFF clients (cleaner, type-safe)
+- Configure timeouts explicitly (connect: 5s, read: 30s recommended)
+- Use interceptors for cross-cutting concerns (auth, logging, correlation IDs)
+- Enable virtual threads for optimal blocking I/O performance
+- Implement proper error handling with status handlers
+- Use connection pooling for high-throughput scenarios
+- Pass authentication tokens via interceptors
+- Log outgoing requests with correlation IDs
+- Cache responses when appropriate (use Spring Cache)
+
+**See also:** `bff-architecture.mdc`, `resilience.mdc`, `testing.mdc`, `code-quality.mdc`

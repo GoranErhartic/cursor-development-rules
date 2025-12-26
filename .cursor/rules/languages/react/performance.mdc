@@ -1,0 +1,598 @@
+---
+description: "Performance optimization - React.memo, useMemo, useCallback, lazy loading, code splitting, bundle optimization"
+globs: ["**/*.tsx", "**/*.ts", "vite.config.ts"]
+---
+
+# Performance Optimization
+
+## React Performance
+
+### React.memo
+```typescript
+// Memoize expensive component renders
+export const ExpensiveComponent = memo(function ExpensiveComponent({ 
+  data, 
+  onUpdate 
+}: ExpensiveProps) {
+  // Complex rendering logic
+  return <div>{/* ... */}</div>;
+});
+
+// With custom comparison
+export const UserCard = memo(
+  function UserCard({ user }: { user: User }) {
+    return <div>{user.name}</div>;
+  },
+  (prevProps, nextProps) => {
+    // Only re-render if user.id changes
+    return prevProps.user.id === nextProps.user.id;
+  }
+);
+
+// When NOT to use memo
+// ❌ Component always renders with new props
+// ❌ Component is very cheap to render
+// ❌ Props are always different (inline objects/functions)
+```
+
+### useMemo
+```typescript
+function ProductList({ products, filter }: ProductListProps) {
+  // Expensive filtering operation - memoize it
+  const filteredProducts = useMemo(
+    () => products.filter(p => p.category === filter),
+    [products, filter]
+  );
+
+  // Expensive calculation
+  const totalPrice = useMemo(
+    () => filteredProducts.reduce((sum, p) => sum + p.price, 0),
+    [filteredProducts]
+  );
+
+  return (
+    <div>
+      <p>Total: ${totalPrice}</p>
+      {filteredProducts.map(p => (
+        <ProductCard key={p.id} product={p} />
+      ))}
+    </div>
+  );
+}
+
+// When NOT to use useMemo
+// ❌ For cheap calculations (primitive operations)
+// ❌ When dependencies change on every render
+const count = useMemo(() => 1 + 1, []); // ❌ Overkill
+```
+
+### useCallback
+```typescript
+function Parent() {
+  const [count, setCount] = useState(0);
+
+  // Memoize callback to prevent child re-renders
+  const handleClick = useCallback(() => {
+    console.log('clicked');
+  }, []); // No dependencies - never changes
+
+  const handleIncrement = useCallback(() => {
+    setCount(c => c + 1); // Use functional update
+  }, []); // Still no dependencies needed
+
+  return (
+    <div>
+      <p>Count: {count}</p>
+      <ExpensiveChild onClick={handleClick} />
+      <button onClick={handleIncrement}>Increment</button>
+    </div>
+  );
+}
+
+// When NOT to use useCallback
+// ❌ Child is not memoized
+// ❌ Function is not passed as prop
+// ❌ Callback references changing values
+```
+
+## Code Splitting
+
+### Route-Based Code Splitting
+```typescript
+import { lazy, Suspense } from 'react';
+import { createBrowserRouter } from 'react-router';
+
+// Lazy load route components
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const Users = lazy(() => import('./pages/Users'));
+const Settings = lazy(() => import('./pages/Settings'));
+
+export const router = createBrowserRouter([
+  {
+    path: '/',
+    element: <RootLayout />,
+    children: [
+      {
+        path: 'dashboard',
+        element: (
+          <Suspense fallback={<PageLoader />}>
+            <Dashboard />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'users',
+        element: (
+          <Suspense fallback={<PageLoader />}>
+            <Users />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'settings',
+        element: (
+          <Suspense fallback={<PageLoader />}>
+            <Settings />
+          </Suspense>
+        ),
+      },
+    ],
+  },
+]);
+```
+
+### Component-Level Code Splitting
+```typescript
+// Heavy component loaded only when needed
+const HeavyChart = lazy(() => import('./components/HeavyChart'));
+const VideoPlayer = lazy(() => import('./components/VideoPlayer'));
+
+function Dashboard() {
+  const [showChart, setShowChart] = useState(false);
+
+  return (
+    <div>
+      <button onClick={() => setShowChart(true)}>
+        Show Chart
+      </button>
+      
+      {showChart && (
+        <Suspense fallback={<ChartSkeleton />}>
+          <HeavyChart />
+        </Suspense>
+      )}
+    </div>
+  );
+}
+```
+
+### Named Exports with Lazy Loading
+```typescript
+// components/Charts.tsx
+export function BarChart() { /* ... */ }
+export function LineChart() { /* ... */ }
+export function PieChart() { /* ... */ }
+
+// App.tsx
+const BarChart = lazy(() => 
+  import('./components/Charts').then(module => ({ default: module.BarChart }))
+);
+```
+
+## Bundle Optimization
+
+### Vite Configuration
+```typescript
+// vite.config.ts
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { visualizer } from 'rollup-plugin-visualizer';
+
+export default defineConfig({
+  plugins: [
+    react(),
+    visualizer({
+      open: true,
+      gzipSize: true,
+      brotliSize: true,
+    }),
+  ],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // Vendor chunks
+          'react-vendor': ['react', 'react-dom'],
+          'router-vendor': ['react-router', 'react-router-dom'],
+          'query-vendor': ['@tanstack/react-query'],
+          'form-vendor': ['react-hook-form', 'zod'],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 500, // KB
+    minify: 'terser',
+    terserOptions: {
+      compress: {
+        drop_console: true, // Remove console.log in production
+        drop_debugger: true,
+      },
+    },
+  },
+});
+```
+
+### Dynamic Imports for Large Libraries
+```typescript
+// Load heavy library only when needed
+async function handleExport() {
+  const { exportToExcel } = await import('heavy-excel-library');
+  await exportToExcel(data);
+}
+
+// Load chart library on demand
+async function loadChart() {
+  const Chart = await import('chart.js');
+  return new Chart.Chart(ctx, config);
+}
+```
+
+## List Virtualization
+
+### React Virtual
+```typescript
+import { useVirtualizer } from '@tanstack/react-virtual';
+
+function VirtualList({ items }: { items: Item[] }) {
+  const parentRef = useRef<HTMLDivElement>(null);
+
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 50, // Estimated item height
+    overscan: 5, // Render 5 extra items outside viewport
+  });
+
+  return (
+    <div
+      ref={parentRef}
+      style={{
+        height: '600px',
+        overflow: 'auto',
+      }}
+    >
+      <div
+        style={{
+          height: `${virtualizer.getTotalSize()}px`,
+          width: '100%',
+          position: 'relative',
+        }}
+      >
+        {virtualizer.getVirtualItems().map((virtualItem) => (
+          <div
+            key={virtualItem.key}
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: `${virtualItem.size}px`,
+              transform: `translateY(${virtualItem.start}px)`,
+            }}
+          >
+            <ItemRow item={items[virtualItem.index]} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+## Image Optimization
+
+### Lazy Loading Images
+```typescript
+function OptimizedImage({ src, alt }: { src: string; alt: string }) {
+  return (
+    <img
+      src={src}
+      alt={alt}
+      loading="lazy" // Native lazy loading
+      decoding="async"
+      className="w-full h-auto"
+    />
+  );
+}
+```
+
+### Progressive Image Loading
+```typescript
+import { useState } from 'react';
+
+function ProgressiveImage({ 
+  src, 
+  placeholder, 
+  alt 
+}: { 
+  src: string; 
+  placeholder: string; 
+  alt: string;
+}) {
+  const [loaded, setLoaded] = useState(false);
+
+  return (
+    <div className="relative">
+      <img
+        src={placeholder}
+        alt={alt}
+        className={cn(
+          'transition-opacity duration-300',
+          loaded ? 'opacity-0' : 'opacity-100'
+        )}
+      />
+      <img
+        src={src}
+        alt={alt}
+        onLoad={() => setLoaded(true)}
+        className={cn(
+          'absolute inset-0 transition-opacity duration-300',
+          loaded ? 'opacity-100' : 'opacity-0'
+        )}
+      />
+    </div>
+  );
+}
+```
+
+### Modern Image Formats
+```typescript
+<picture>
+  <source srcSet="/image.avif" type="image/avif" />
+  <source srcSet="/image.webp" type="image/webp" />
+  <img src="/image.jpg" alt="Fallback" loading="lazy" />
+</picture>
+```
+
+## Debouncing & Throttling
+
+### Debounce
+```typescript
+import { useDeferredValue, useState, useTransition } from 'react';
+
+// React 19 approach
+function SearchInput() {
+  const [query, setQuery] = useState('');
+  const deferredQuery = useDeferredValue(query);
+
+  // deferredQuery updates after query stops changing
+  useEffect(() => {
+    search(deferredQuery);
+  }, [deferredQuery]);
+
+  return <input value={query} onChange={e => setQuery(e.target.value)} />;
+}
+
+// Custom hook
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+
+    return () => clearTimeout(handler);
+  }, [value, delay]);
+
+  return debouncedValue;
+}
+```
+
+### Throttle
+```typescript
+function useThrottle<T>(value: T, interval: number): T {
+  const [throttledValue, setThrottledValue] = useState(value);
+  const lastRan = useRef(Date.now());
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      if (Date.now() - lastRan.current >= interval) {
+        setThrottledValue(value);
+        lastRan.current = Date.now();
+      }
+    }, interval - (Date.now() - lastRan.current));
+
+    return () => clearTimeout(handler);
+  }, [value, interval]);
+
+  return throttledValue;
+}
+```
+
+## Web Vitals Optimization
+
+### Core Web Vitals
+```typescript
+import { onCLS, onFID, onLCP } from 'web-vitals';
+
+function reportWebVitals() {
+  onCLS(metric => {
+    console.log('CLS:', metric.value);
+    // Send to analytics
+  });
+
+  onFID(metric => {
+    console.log('FID:', metric.value);
+  });
+
+  onLCP(metric => {
+    console.log('LCP:', metric.value);
+  });
+}
+
+// In main.tsx
+reportWebVitals();
+```
+
+### Optimize LCP (Largest Contentful Paint)
+```typescript
+// Preload critical resources
+<link rel="preload" href="/fonts/inter.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="/hero-image.jpg" as="image" />
+
+// Priority hints
+<img src="/hero.jpg" fetchpriority="high" alt="Hero" />
+<img src="/footer.jpg" fetchpriority="low" alt="Footer" />
+```
+
+### Optimize CLS (Cumulative Layout Shift)
+```typescript
+// Always specify dimensions
+<img src="/image.jpg" width={800} height={600} alt="..." />
+
+// Reserve space for dynamic content
+<div className="min-h-[200px]">
+  {isLoading ? <Skeleton /> : <Content />}
+</div>
+
+// Use aspect ratio
+<div className="aspect-video">
+  <iframe src="..." className="w-full h-full" />
+</div>
+```
+
+## React Query Optimization
+
+### Stale Time Configuration
+```typescript
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 5 * 60 * 1000, // 5 minutes
+      gcTime: 10 * 60 * 1000, // 10 minutes
+    },
+  },
+});
+```
+
+### Selective Subscriptions
+```typescript
+// Only subscribe to needed data
+function UserName({ userId }: { userId: string }) {
+  const name = useUserStore(
+    state => state.users[userId]?.name,
+    shallow // Use shallow comparison
+  );
+  
+  return <span>{name}</span>;
+}
+```
+
+## Profiling
+
+### React DevTools Profiler
+```typescript
+import { Profiler, ProfilerOnRenderCallback } from 'react';
+
+const onRenderCallback: ProfilerOnRenderCallback = (
+  id,
+  phase,
+  actualDuration,
+  baseDuration,
+  startTime,
+  commitTime
+) => {
+  console.log({ id, phase, actualDuration });
+};
+
+function App() {
+  return (
+    <Profiler id="App" onRender={onRenderCallback}>
+      <AppContent />
+    </Profiler>
+  );
+}
+```
+
+## Performance Monitoring
+
+### Custom Performance Hooks
+```typescript
+function useRenderCount() {
+  const renderCount = useRef(0);
+  
+  useEffect(() => {
+    renderCount.current += 1;
+    console.log(`Component rendered ${renderCount.current} times`);
+  });
+  
+  return renderCount.current;
+}
+
+function useWhyDidYouUpdate(name: string, props: Record<string, any>) {
+  const previousProps = useRef<Record<string, any>>();
+
+  useEffect(() => {
+    if (previousProps.current) {
+      const allKeys = Object.keys({ ...previousProps.current, ...props });
+      const changedProps: Record<string, any> = {};
+
+      allKeys.forEach(key => {
+        if (previousProps.current![key] !== props[key]) {
+          changedProps[key] = {
+            from: previousProps.current![key],
+            to: props[key],
+          };
+        }
+      });
+
+      if (Object.keys(changedProps).length > 0) {
+        console.log('[why-did-you-update]', name, changedProps);
+      }
+    }
+
+    previousProps.current = props;
+  });
+}
+```
+
+## Best Practices
+
+- ✅ Use React.memo for expensive components
+- ✅ Memoize callbacks passed to child components
+- ✅ Use useMemo for expensive calculations
+- ✅ Implement code splitting at route level
+- ✅ Lazy load heavy components
+- ✅ Virtualize long lists
+- ✅ Optimize images (lazy loading, modern formats)
+- ✅ Debounce expensive operations
+- ✅ Monitor Web Vitals
+- ✅ Use React DevTools Profiler
+
+## Anti-Patterns
+
+- ❌ Premature optimization
+- ❌ Memoizing everything
+- ❌ Using memo on cheap components
+- ❌ Not specifying image dimensions
+- ❌ Large bundle sizes
+- ❌ Not lazy loading routes
+- ❌ Rendering huge lists without virtualization
+- ❌ Inline object/function props on memoized components
+- ❌ Not monitoring performance
+- ❌ Over-engineering simple components
+
+## Performance Checklist
+
+- [ ] Routes are code-split
+- [ ] Heavy components are lazy loaded
+- [ ] Images are lazy loaded and optimized
+- [ ] Long lists are virtualized
+- [ ] Expensive calculations are memoized
+- [ ] Callbacks are memoized where needed
+- [ ] Bundle size is analyzed and optimized
+- [ ] Web Vitals are monitored
+- [ ] No unnecessary re-renders
+- [ ] Production build is optimized
+
+**See also:** `data-fetching.mdc`, `components.mdc`, `state-management.mdc`

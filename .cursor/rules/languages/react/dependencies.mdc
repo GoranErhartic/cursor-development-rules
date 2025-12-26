@@ -1,0 +1,440 @@
+---
+description: "pnpm workspace, package selection criteria, security scanning, license verification"
+globs: ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".npmrc"]
+---
+
+# Dependencies & Package Management
+
+## pnpm Workspace Configuration
+
+### Root Configuration (.npmrc)
+```ini
+# Use pnpm for consistent package management
+engine-strict=true
+auto-install-peers=true
+strict-peer-dependencies=false
+shamefully-hoist=false
+
+# Registry settings
+registry=https://registry.npmjs.org/
+
+# Save exact versions
+save-exact=true
+
+# Node version enforcement
+node-version-range=">=20.0.0"
+```
+
+### package.json (Root)
+```json
+{
+  "name": "my-app",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "preview": "vite preview",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "type-check": "tsc --noEmit",
+    "audit": "pnpm audit --audit-level moderate",
+    "outdated": "pnpm outdated"
+  }
+}
+```
+
+### Workspace Setup (pnpm-workspace.yaml)
+```yaml
+packages:
+  - 'apps/*'
+  - 'packages/*'
+```
+
+## Package Selection Criteria
+
+### MANDATORY Requirements
+
+- **ONLY use free and open-source packages**
+- Acceptable licenses: MIT, Apache 2.0, BSD-2, BSD-3, ISC, or any OSI-approved free license
+- **STOP and ask** before introducing packages with commercial/paid tiers
+- **NEVER use packages that require paid licenses for production use**
+- Be cautious with copyleft licenses (GPL, AGPL) — they have viral implications
+
+### Evaluation Checklist
+
+Before adding any dependency:
+
+1. ✅ **License** - Verify it's free and compatible
+2. ✅ **Maintenance** - Last commit within 6 months
+3. ✅ **Security** - No known vulnerabilities
+4. ✅ **Bundle Size** - Check impact on bundle size
+5. ✅ **Dependencies** - Verify it doesn't pull in problematic sub-dependencies
+6. ✅ **TypeScript Support** - Has built-in types or `@types/*` package
+7. ✅ **Documentation** - Well-documented API
+8. ✅ **Community** - Active issues, discussions, and releases
+
+## Recommended Packages (React 19 Ecosystem)
+
+### Core Framework
+```json
+{
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  }
+}
+```
+
+### Routing
+```json
+{
+  "dependencies": {
+    "react-router": "^7.0.0",
+    "react-router-dom": "^7.0.0"
+  }
+}
+```
+
+### State Management
+```json
+{
+  "dependencies": {
+    "zustand": "^5.0.0"
+  }
+}
+```
+
+### Data Fetching
+```json
+{
+  "dependencies": {
+    "@tanstack/react-query": "^5.0.0",
+    "@tanstack/react-query-devtools": "^5.0.0"
+  }
+}
+```
+
+### Forms & Validation
+```json
+{
+  "dependencies": {
+    "react-hook-form": "^7.0.0",
+    "zod": "^3.23.0",
+    "@hookform/resolvers": "^3.0.0"
+  }
+}
+```
+
+### Styling
+```json
+{
+  "dependencies": {
+    "tailwindcss": "^3.4.0",
+    "clsx": "^2.0.0",
+    "tailwind-merge": "^2.5.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/forms": "^0.5.0",
+    "@tailwindcss/typography": "^0.5.0",
+    "autoprefixer": "^10.0.0",
+    "postcss": "^8.0.0"
+  }
+}
+```
+
+### UI Components (Headless)
+```json
+{
+  "dependencies": {
+    "@radix-ui/react-dialog": "^1.0.0",
+    "@radix-ui/react-dropdown-menu": "^2.0.0",
+    "@radix-ui/react-select": "^2.0.0",
+    "@radix-ui/react-tabs": "^1.0.0",
+    "@radix-ui/react-toast": "^1.0.0"
+  }
+}
+```
+
+### Utilities
+```json
+{
+  "dependencies": {
+    "date-fns": "^4.0.0",
+    "nanoid": "^5.0.0",
+    "dompurify": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/dompurify": "^3.0.0"
+  }
+}
+```
+
+### Testing
+```json
+{
+  "devDependencies": {
+    "vitest": "^2.0.0",
+    "@vitest/ui": "^2.0.0",
+    "@testing-library/react": "^16.0.0",
+    "@testing-library/jest-dom": "^6.0.0",
+    "@testing-library/user-event": "^14.0.0",
+    "jsdom": "^25.0.0"
+  }
+}
+```
+
+### TypeScript & Build Tools
+```json
+{
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0"
+  }
+}
+```
+
+### Linting & Formatting
+```json
+{
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "@eslint/js": "^9.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint-plugin-react": "^7.37.0",
+    "eslint-plugin-react-hooks": "^5.0.0",
+    "eslint-plugin-jsx-a11y": "^6.10.0",
+    "prettier": "^3.3.0",
+    "prettier-plugin-tailwindcss": "^0.6.0"
+  }
+}
+```
+
+## Security Scanning
+
+### Regular Audits
+```bash
+# Check for vulnerabilities (run weekly)
+pnpm audit --audit-level moderate
+
+# Fix automatically when possible
+pnpm audit --fix
+
+# Check for outdated packages
+pnpm outdated
+
+# Update dependencies interactively
+pnpm update --interactive --latest
+```
+
+### Automated Security
+
+#### GitHub Dependabot
+```yaml
+# .github/dependabot.yml
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      dependencies:
+        patterns:
+          - "*"
+```
+
+#### Pre-commit Hook
+```json
+{
+  "scripts": {
+    "prepare": "husky install"
+  },
+  "devDependencies": {
+    "husky": "^9.0.0"
+  }
+}
+```
+
+```bash
+# .husky/pre-commit
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+pnpm audit --audit-level high
+pnpm lint
+pnpm type-check
+```
+
+## License Verification
+
+### Check Package Licenses
+```bash
+# Install license checker
+pnpm add -D license-checker
+
+# Check all licenses
+pnpm license-checker --summary
+
+# Check for problematic licenses
+pnpm license-checker --onlyAllow "MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC"
+```
+
+### Document Dependencies
+```json
+{
+  "scripts": {
+    "licenses": "license-checker --json --out licenses.json",
+    "licenses:summary": "license-checker --summary"
+  }
+}
+```
+
+## Bundle Size Management
+
+### Analyze Bundle
+```bash
+# Install analyzer
+pnpm add -D rollup-plugin-visualizer
+
+# Add to vite.config.ts
+import { visualizer } from 'rollup-plugin-visualizer';
+
+export default defineConfig({
+  plugins: [
+    react(),
+    visualizer({
+      open: true,
+      gzipSize: true,
+      brotliSize: true,
+    }),
+  ],
+});
+```
+
+### Check Package Size Before Installing
+```bash
+# Use bundlephobia
+pnpm dlx bundle-phobia <package-name>
+
+# Or check online: https://bundlephobia.com/
+```
+
+### Size Budgets
+```typescript
+// vite.config.ts
+export default defineConfig({
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom'],
+          router: ['react-router', 'react-router-dom'],
+          query: ['@tanstack/react-query'],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 500, // KB
+  },
+});
+```
+
+## Version Pinning Strategy
+
+### Exact Versions for Critical Packages
+```json
+{
+  "dependencies": {
+    "react": "19.0.0",          // Exact version
+    "react-dom": "19.0.0",      // Exact version
+    "zustand": "^5.0.0",        // Allow minor/patch
+    "clsx": "^2.0.0"            // Allow minor/patch
+  }
+}
+```
+
+### Update Strategy
+- **Major updates** - Review changelog, test thoroughly
+- **Minor updates** - Review, update in batches
+- **Patch updates** - Update regularly (weekly)
+- **Security updates** - Apply immediately
+
+## Anti-Patterns
+
+- ❌ Using `npm` or `yarn` when pnpm is specified
+- ❌ Committing `node_modules/`
+- ❌ Not committing `pnpm-lock.yaml`
+- ❌ Installing packages without checking license
+- ❌ Ignoring security audit warnings
+- ❌ Using packages with no recent updates (>1 year)
+- ❌ Duplicate packages (check with `pnpm list --depth=0`)
+- ❌ Mixing `dependencies` and `devDependencies` incorrectly
+- ❌ Not specifying `engines` field in package.json
+- ❌ Using global installations instead of local dev dependencies
+
+## Monorepo Best Practices
+
+### Shared Configuration Packages
+```
+packages/
+  ├── eslint-config/
+  │   └── package.json
+  ├── tsconfig/
+  │   └── package.json
+  └── tailwind-config/
+      └── package.json
+
+apps/
+  ├── web/
+  └── admin/
+```
+
+### Workspace Dependencies
+```json
+{
+  "dependencies": {
+    "@my-org/ui-components": "workspace:*",
+    "@my-org/shared-utils": "workspace:*"
+  }
+}
+```
+
+## CI/CD Integration
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level high
+      - run: pnpm lint
+      - run: pnpm type-check
+      - run: pnpm test
+      - run: pnpm build
+```
+
+**See also:** `code-quality.mdc`, `../../patterns/security.mdc`, `security.mdc`
