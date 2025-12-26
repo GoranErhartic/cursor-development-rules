@@ -1,0 +1,692 @@
+---
+description: "Error handling - Error boundaries, Result pattern, global error handling, toast notifications"
+globs: ["**/error/**/*.tsx", "**/*Error*.tsx", "**/*.tsx", "**/*.ts"]
+---
+
+# Error Handling
+
+## Error Boundaries
+
+### Basic Error Boundary
+```typescript
+import React, { Component, ErrorInfo, ReactNode } from 'react';
+
+interface ErrorBoundaryProps {
+  children: ReactNode;
+  fallback?: ReactNode;
+  onError?: (error: Error, errorInfo: ErrorInfo) => void;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    // Log to error reporting service
+    console.error('Error caught by boundary:', error, errorInfo);
+    
+    // Call custom error handler
+    this.props.onError?.(error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback || (
+        <ErrorFallback error={this.state.error} reset={() => this.setState({ hasError: false, error: null })} />
+      );
+    }
+
+    return this.props.children;
+  }
+}
+```
+
+### Error Fallback Component
+```typescript
+interface ErrorFallbackProps {
+  error: Error | null;
+  reset: () => void;
+}
+
+export function ErrorFallback({ error, reset }: ErrorFallbackProps) {
+  return (
+    <div className="error-fallback">
+      <h2>Something went wrong</h2>
+      <details>
+        <summary>Error details</summary>
+        <pre>{error?.message}</pre>
+        {import.meta.env.DEV && <pre>{error?.stack}</pre>}
+      </details>
+      <button onClick={reset}>Try again</button>
+    </div>
+  );
+}
+```
+
+### Granular Error Boundaries
+```typescript
+function App() {
+  return (
+    <ErrorBoundary fallback={<FullPageError />}>
+      <Header />
+      
+      <ErrorBoundary fallback={<SidebarError />}>
+        <Sidebar />
+      </ErrorBoundary>
+      
+      <main>
+        <ErrorBoundary fallback={<ContentError />}>
+          <Outlet />
+        </ErrorBoundary>
+      </main>
+      
+      <Footer />
+    </ErrorBoundary>
+  );
+}
+```
+
+## Result Pattern
+
+### Result Type Definition
+```typescript
+// types/result.ts
+export type Result<T, E = Error> =
+  | { success: true; value: T }
+  | { success: false; error: E };
+
+export const Result = {
+  ok<T>(value: T): Result<T, never> {
+    return { success: true, value };
+  },
+
+  err<E>(error: E): Result<never, E> {
+    return { success: false, error };
+  },
+
+  isOk<T, E>(result: Result<T, E>): result is { success: true; value: T } {
+    return result.success;
+  },
+
+  isErr<T, E>(result: Result<T, E>): result is { success: false; error: E } {
+    return !result.success;
+  },
+};
+```
+
+### Using Result Pattern
+```typescript
+// API function
+async function fetchUser(userId: string): Promise<Result<User, ApiError>> {
+  try {
+    const response = await fetch(`/api/users/${userId}`);
+    
+    if (!response.ok) {
+      return Result.err({
+        code: response.status,
+        message: 'Failed to fetch user',
+      });
+    }
+
+    const user = await response.json();
+    return Result.ok(user);
+  } catch (error) {
+    return Result.err({
+      code: 500,
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+}
+
+// Component usage
+function UserProfile({ userId }: { userId: string }) {
+  const [result, setResult] = useState<Result<User, ApiError> | null>(null);
+
+  useEffect(() => {
+    fetchUser(userId).then(setResult);
+  }, [userId]);
+
+  if (!result) return <Spinner />;
+
+  if (Result.isErr(result)) {
+    return <ErrorMessage error={result.error} />;
+  }
+
+  const user = result.value;
+  return <div>{user.name}</div>;
+}
+```
+
+### Result Helpers
+```typescript
+export const ResultHelpers = {
+  // Map over success value
+  map<T, U, E>(
+    result: Result<T, E>,
+    fn: (value: T) => U
+  ): Result<U, E> {
+    return result.success
+      ? Result.ok(fn(result.value))
+      : result;
+  },
+
+  // Map over error
+  mapErr<T, E, F>(
+    result: Result<T, E>,
+    fn: (error: E) => F
+  ): Result<T, F> {
+    return result.success
+      ? result
+      : Result.err(fn(result.error));
+  },
+
+  // Chain async operations
+  async andThen<T, U, E>(
+    result: Result<T, E>,
+    fn: (value: T) => Promise<Result<U, E>>
+  ): Promise<Result<U, E>> {
+    return result.success
+      ? fn(result.value)
+      : result;
+  },
+
+  // Unwrap with default
+  unwrapOr<T, E>(result: Result<T, E>, defaultValue: T): T {
+    return result.success ? result.value : defaultValue;
+  },
+
+  // Combine multiple results
+  all<T extends readonly Result<any, any>[]>(
+    results: T
+  ): Result<{ [K in keyof T]: T[K] extends Result<infer V, any> ? V : never }, any> {
+    const values: any[] = [];
+    
+    for (const result of results) {
+      if (!result.success) {
+        return result as any;
+      }
+      values.push(result.value);
+    }
+    
+    return Result.ok(values as any);
+  },
+};
+
+// Usage
+const userResult = await fetchUser('123');
+const upperCaseName = ResultHelpers.map(userResult, user => user.name.toUpperCase());
+```
+
+## Error Types
+
+### Custom Error Classes
+```typescript
+export class ApiError extends Error {
+  constructor(
+    public statusCode: number,
+    message: string,
+    public details?: unknown
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+export class ValidationError extends Error {
+  constructor(
+    message: string,
+    public fields: Record<string, string[]>
+  ) {
+    super(message);
+    this.name = 'ValidationError';
+  }
+}
+
+export class AuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AuthError';
+  }
+}
+
+export class NetworkError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NetworkError';
+  }
+}
+```
+
+### Error Type Guards
+```typescript
+export function isApiError(error: unknown): error is ApiError {
+  return error instanceof ApiError;
+}
+
+export function isValidationError(error: unknown): error is ValidationError {
+  return error instanceof ValidationError;
+}
+
+export function isAuthError(error: unknown): error is AuthError {
+  return error instanceof AuthError;
+}
+
+export function isNetworkError(error: unknown): error is NetworkError {
+  return error instanceof NetworkError;
+}
+```
+
+## Global Error Handling
+
+### Axios Interceptor
+```typescript
+import axios from 'axios';
+
+export const apiClient = axios.create({
+  baseURL: import.meta.env.VITE_API_URL,
+});
+
+apiClient.interceptors.response.use(
+  response => response,
+  error => {
+    if (error.response) {
+      // Server responded with error status
+      const { status, data } = error.response;
+
+      if (status === 401) {
+        // Unauthorized - redirect to login
+        window.location.href = '/login';
+        return Promise.reject(new AuthError('Authentication required'));
+      }
+
+      if (status === 403) {
+        return Promise.reject(new AuthError('Permission denied'));
+      }
+
+      if (status === 422) {
+        return Promise.reject(new ValidationError('Validation failed', data.errors));
+      }
+
+      return Promise.reject(new ApiError(status, data.message || 'Request failed'));
+    }
+
+    if (error.request) {
+      // Request made but no response
+      return Promise.reject(new NetworkError('No response from server'));
+    }
+
+    // Something else happened
+    return Promise.reject(error);
+  }
+);
+```
+
+### TanStack Query Error Handling
+```typescript
+import { QueryClient } from '@tanstack/react-query';
+import toast from 'react-hot-toast';
+
+export const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      throwOnError: false,
+      retry: (failureCount, error) => {
+        // Don't retry on auth errors
+        if (isAuthError(error)) return false;
+        
+        // Don't retry on validation errors
+        if (isValidationError(error)) return false;
+        
+        // Retry network errors up to 3 times
+        return failureCount < 3;
+      },
+    },
+    mutations: {
+      onError: (error) => {
+        if (isValidationError(error)) {
+          toast.error('Please check your input');
+        } else if (isAuthError(error)) {
+          toast.error('Authentication required');
+        } else {
+          toast.error('An error occurred. Please try again.');
+        }
+      },
+    },
+  },
+});
+```
+
+## Error Display Components
+
+### Error Message Component
+```typescript
+interface ErrorMessageProps {
+  error: Error | null;
+  retry?: () => void;
+  className?: string;
+}
+
+export function ErrorMessage({ error, retry, className }: ErrorMessageProps) {
+  if (!error) return null;
+
+  return (
+    <div className={cn('error-message', className)}>
+      <div className="error-icon">⚠️</div>
+      <div>
+        <h3>Error</h3>
+        <p>{error.message}</p>
+        {retry && (
+          <button onClick={retry} className="retry-button">
+            Try Again
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+```
+
+### Inline Field Error
+```typescript
+interface FieldErrorProps {
+  error?: string;
+  fieldId?: string;
+}
+
+export function FieldError({ error, fieldId }: FieldErrorProps) {
+  if (!error) return null;
+
+  return (
+    <span
+      id={fieldId ? `${fieldId}-error` : undefined}
+      className="field-error"
+      role="alert"
+    >
+      {error}
+    </span>
+  );
+}
+```
+
+### Toast Notifications
+```typescript
+import toast from 'react-hot-toast';
+
+export const notify = {
+  success: (message: string) => {
+    toast.success(message);
+  },
+
+  error: (message: string) => {
+    toast.error(message);
+  },
+
+  promise: <T,>(
+    promise: Promise<T>,
+    messages: {
+      loading: string;
+      success: string;
+      error: string;
+    }
+  ) => {
+    return toast.promise(promise, messages);
+  },
+};
+
+// Usage
+async function deleteUser(id: string) {
+  notify.promise(
+    apiClient.delete(`/users/${id}`),
+    {
+      loading: 'Deleting user...',
+      success: 'User deleted successfully',
+      error: 'Failed to delete user',
+    }
+  );
+}
+```
+
+## Async Error Handling
+
+### useAsync Hook
+```typescript
+interface AsyncState<T> {
+  data: T | null;
+  error: Error | null;
+  isLoading: boolean;
+}
+
+export function useAsync<T>(
+  asyncFn: () => Promise<T>,
+  dependencies: React.DependencyList = []
+) {
+  const [state, setState] = useState<AsyncState<T>>({
+    data: null,
+    error: null,
+    isLoading: true,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    setState({ data: null, error: null, isLoading: true });
+
+    asyncFn()
+      .then(data => {
+        if (!cancelled) {
+          setState({ data, error: null, isLoading: false });
+        }
+      })
+      .catch(error => {
+        if (!cancelled) {
+          setState({ data: null, error, isLoading: false });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, dependencies);
+
+  return state;
+}
+
+// Usage
+function UserProfile({ userId }: { userId: string }) {
+  const { data: user, error, isLoading } = useAsync(
+    () => fetchUser(userId),
+    [userId]
+  );
+
+  if (isLoading) return <Spinner />;
+  if (error) return <ErrorMessage error={error} />;
+  if (!user) return null;
+
+  return <div>{user.name}</div>;
+}
+```
+
+### Error Recovery
+```typescript
+function UserList() {
+  const [retryCount, setRetryCount] = useState(0);
+
+  const { data, error, refetch } = useQuery({
+    queryKey: ['users', retryCount],
+    queryFn: fetchUsers,
+    retry: 3,
+  });
+
+  const handleRetry = () => {
+    setRetryCount(prev => prev + 1);
+    refetch();
+  };
+
+  if (error) {
+    return (
+      <ErrorFallback
+        error={error}
+        reset={handleRetry}
+        retryCount={retryCount}
+      />
+    );
+  }
+
+  return <List items={data} />;
+}
+```
+
+## Form Error Handling
+
+### React Hook Form Errors
+```typescript
+function CreatePostForm() {
+  const {
+    register,
+    handleSubmit,
+    setError,
+    formState: { errors, isSubmitting },
+  } = useForm<PostFormData>();
+
+  const onSubmit = async (data: PostFormData) => {
+    try {
+      await createPost(data);
+    } catch (error) {
+      if (isValidationError(error)) {
+        // Set field-specific errors
+        Object.entries(error.fields).forEach(([field, messages]) => {
+          setError(field as keyof PostFormData, {
+            message: messages[0],
+          });
+        });
+      } else {
+        // Set global form error
+        setError('root', {
+          message: 'Failed to create post. Please try again.',
+        });
+      }
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)}>
+      <input {...register('title')} />
+      <FieldError error={errors.title?.message} />
+
+      <textarea {...register('content')} />
+      <FieldError error={errors.content?.message} />
+
+      {errors.root && (
+        <div className="form-error">{errors.root.message}</div>
+      )}
+
+      <button type="submit" disabled={isSubmitting}>
+        Create Post
+      </button>
+    </form>
+  );
+}
+```
+
+## Error Logging
+
+### Error Logger
+```typescript
+interface ErrorLogEntry {
+  timestamp: Date;
+  error: Error;
+  context?: Record<string, unknown>;
+  userId?: string;
+}
+
+class ErrorLogger {
+  private logs: ErrorLogEntry[] = [];
+
+  log(error: Error, context?: Record<string, unknown>) {
+    const entry: ErrorLogEntry = {
+      timestamp: new Date(),
+      error,
+      context,
+    };
+
+    this.logs.push(entry);
+
+    // Send to error tracking service in production
+    if (import.meta.env.PROD) {
+      this.sendToService(entry);
+    } else {
+      console.error('Error logged:', entry);
+    }
+  }
+
+  private async sendToService(entry: ErrorLogEntry) {
+    // Send to Sentry, LogRocket, etc.
+    try {
+      await fetch('/api/errors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: entry.error.message,
+          stack: entry.error.stack,
+          context: entry.context,
+          timestamp: entry.timestamp.toISOString(),
+        }),
+      });
+    } catch {
+      // Silently fail - don't throw from error logger
+    }
+  }
+}
+
+export const errorLogger = new ErrorLogger();
+
+// Usage
+try {
+  await riskyOperation();
+} catch (error) {
+  errorLogger.log(error as Error, {
+    operation: 'riskyOperation',
+    userId: currentUser.id,
+  });
+  throw error;
+}
+```
+
+## Best Practices
+
+- ✅ Use Error Boundaries for UI errors
+- ✅ Use Result pattern for expected failures
+- ✅ Provide clear, user-friendly error messages
+- ✅ Log errors with context
+- ✅ Implement retry logic for transient errors
+- ✅ Display loading and error states
+- ✅ Clean up async operations on unmount
+- ✅ Use custom error types for different scenarios
+- ✅ Provide recovery options (retry, fallback)
+- ✅ Don't expose sensitive info in error messages
+
+## Anti-Patterns
+
+- ❌ Silent failures (swallowing errors)
+- ❌ Generic error messages ("Something went wrong")
+- ❌ Logging errors without context
+- ❌ Not cleaning up after errors
+- ❌ Exposing stack traces in production
+- ❌ Not handling async errors
+- ❌ Retrying operations indefinitely
+- ❌ Not providing user feedback
+- ❌ Catching errors too early
+- ❌ Using errors for control flow
+
+**See also:** `../../patterns/error-handling.mdc`, `data-fetching.mdc`, `forms.mdc`, `validation.mdc`

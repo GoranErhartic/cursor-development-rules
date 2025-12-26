@@ -1,0 +1,569 @@
+---
+description: "Response aggregation and transformation patterns for BFF - parallel calls, CompletableFuture, partial failures"
+globs: ["**/*Aggregation*.java", "**/*Facade*.java", "**/bff/service/**/*.java"]
+---
+
+# Response Aggregation Patterns
+
+## Overview
+
+**Response aggregation** is the core responsibility of a BFF layer. It involves:
+
+1. **Calling** multiple backend APIs
+2. **Combining** their responses
+3. **Transforming** data to client-friendly formats
+4. **Handling** partial failures gracefully
+
+## Sequential Aggregation
+
+Use when the second call **depends on the result** of the first.
+
+### Basic Sequential Pattern
+
+```java
+@Service
+public class OrderAggregationService {
+    
+    private final OrderApiClient orderClient;
+    private final InventoryApiClient inventoryClient;
+    
+    public OrderAggregationService(
+            OrderApiClient orderClient,
+            InventoryApiClient inventoryClient) {
+        this.orderClient = orderClient;
+        this.inventoryClient = inventoryClient;
+    }
+    
+    public OrderDetailResponse getOrderDetails(UUID orderId) {
+        // Step 1: Get order
+        var order = orderClient.getOrder(orderId);
+        
+        // Step 2: Get inventory for products in order (depends on order)
+        var productIds = order.items().stream()
+            .map(OrderItemDto::productId)
+            .toList();
+        
+        var inventory = inventoryClient.getInventoryForProducts(productIds);
+        
+        // Step 3: Combine and transform
+        return OrderDetailResponse.from(order, inventory);
+    }
+}
+```
+
+### Sequential with Error Handling
+
+```java
+@Service
+public class UserProfileAggregationService {
+    
+    private final UserApiClient userClient;
+    private final PreferencesApiClient preferencesClient;
+    
+    @CircuitBreaker(name = "userService", fallbackMethod = "userFallback")
+    public UserDto getUser(UUID userId) {
+        return userClient.getUser(userId);
+    }
+    
+    @CircuitBreaker(name = "preferencesService", fallbackMethod = "preferencesFallback")
+    public UserPreferencesDto getPreferences(UUID userId) {
+        return preferencesClient.getPreferences(userId);
+    }
+    
+    public UserProfileResponse getUserProfile(UUID userId) {
+        // Get user first (required)
+        var user = getUser(userId);
+        
+        // Get preferences (optional, has fallback)
+        var preferences = getPreferences(userId);
+        
+        return UserProfileResponse.from(user, preferences);
+    }
+    
+    // Fallback methods
+    private UserDto userFallback(UUID userId, Throwable t) {
+        log.error("Failed to get user {}, no fallback available", userId, t);
+        throw new UserNotFoundException(userId);
+    }
+    
+    private UserPreferencesDto preferencesFallback(UUID userId, Throwable t) {
+        log.warn("Failed to get preferences for {}, returning defaults", userId);
+        return UserPreferencesDto.defaults();
+    }
+}
+```
+
+## Parallel Aggregation
+
+Use when calls are **independent** and can execute simultaneously.
+
+### Basic Parallel Pattern with CompletableFuture
+
+```java
+@Service
+public class DashboardAggregationService {
+    
+    private final OrderApiClient orderClient;
+    private final UserApiClient userClient;
+    private final NotificationApiClient notificationClient;
+    
+    public DashboardAggregationService(
+            OrderApiClient orderClient,
+            UserApiClient userClient,
+            NotificationApiClient notificationClient) {
+        this.orderClient = orderClient;
+        this.userClient = userClient;
+        this.notificationClient = notificationClient;
+    }
+    
+    public DashboardResponse getDashboard(UUID userId) {
+        // Execute all calls in parallel
+        var ordersFuture = CompletableFuture.supplyAsync(
+            () -> orderClient.getUserOrders(userId)
+        );
+        
+        var userFuture = CompletableFuture.supplyAsync(
+            () -> userClient.getUserProfile(userId)
+        );
+        
+        var notificationsFuture = CompletableFuture.supplyAsync(
+            () -> notificationClient.getUnreadNotifications(userId)
+        );
+        
+        // Wait for all to complete
+        CompletableFuture.allOf(ordersFuture, userFuture, notificationsFuture).join();
+        
+        // Get results
+        var orders = ordersFuture.join();
+        var user = userFuture.join();
+        var notifications = notificationsFuture.join();
+        
+        return new DashboardResponse(user, orders, notifications);
+    }
+}
+```
+
+### Parallel Aggregation with Virtual Threads
+
+**With virtual threads enabled**, blocking calls are efficient:
+
+```java
+@Service
+public class DashboardAggregationService {
+    
+    // RestClient calls block, but on virtual threads it's efficient
+    public DashboardResponse getDashboard(UUID userId) {
+        var ordersFuture = CompletableFuture.supplyAsync(
+            () -> orderClient.getUserOrders(userId)  // Blocking call
+        );
+        
+        var userFuture = CompletableFuture.supplyAsync(
+            () -> userClient.getUserProfile(userId)  // Blocking call
+        );
+        
+        var notificationsFuture = CompletableFuture.supplyAsync(
+            () -> notificationClient.getUnreadNotifications(userId)  // Blocking call
+        );
+        
+        CompletableFuture.allOf(ordersFuture, userFuture, notificationsFuture).join();
+        
+        return new DashboardResponse(
+            userFuture.join(),
+            ordersFuture.join(),
+            notificationsFuture.join()
+        );
+    }
+}
+```
+
+## Partial Failure Handling
+
+### Pattern 1: Optional Data with Fallbacks
+
+Return defaults or empty data when non-critical services fail.
+
+```java
+@Service
+public class ResilientAggregationService {
+    
+    private final OrderApiClient orderClient;
+    private final RecommendationApiClient recommendationClient;
+    
+    @CircuitBreaker(name = "orderService")
+    public List<OrderDto> getOrders(UUID userId) {
+        return orderClient.getUserOrders(userId);
+    }
+    
+    @CircuitBreaker(name = "recommendationService", fallbackMethod = "recommendationsFallback")
+    public List<ProductDto> getRecommendations(UUID userId) {
+        return recommendationClient.getRecommendations(userId);
+    }
+    
+    public OrderPageResponse getOrderPage(UUID userId) {
+        var ordersFuture = CompletableFuture.supplyAsync(() -> getOrders(userId));
+        var recommendationsFuture = CompletableFuture.supplyAsync(() -> getRecommendations(userId));
+        
+        // Wait for both
+        CompletableFuture.allOf(ordersFuture, recommendationsFuture).join();
+        
+        return new OrderPageResponse(
+            ordersFuture.join(),
+            recommendationsFuture.join()  // May return empty list from fallback
+        );
+    }
+    
+    // Fallback: return empty recommendations on failure
+    private List<ProductDto> recommendationsFallback(UUID userId, Throwable t) {
+        log.warn("Recommendations unavailable for {}, returning empty list", userId, t);
+        return List.of();
+    }
+}
+```
+
+### Pattern 2: Fail Fast for Critical Data
+
+Propagate exceptions for required data.
+
+```java
+@Service
+public class CheckoutAggregationService {
+    
+    private final OrderApiClient orderClient;
+    private final PaymentApiClient paymentClient;
+    private final ShippingApiClient shippingClient;
+    
+    public CheckoutSummaryResponse getCheckoutSummary(UUID orderId) {
+        // Order is REQUIRED - no fallback
+        var orderFuture = CompletableFuture.supplyAsync(
+            () -> orderClient.getOrder(orderId)
+        );
+        
+        // Payment info is REQUIRED - no fallback
+        var paymentFuture = CompletableFuture.supplyAsync(
+            () -> paymentClient.getPaymentInfo(orderId)
+        );
+        
+        // Shipping options are OPTIONAL - has fallback
+        var shippingFuture = CompletableFuture.supplyAsync(
+            () -> getShippingOptions(orderId)
+        ).exceptionally(ex -> {
+            log.warn("Shipping service unavailable, using defaults", ex);
+            return List.of(ShippingOptionDto.standard());
+        });
+        
+        // Wait for all
+        CompletableFuture.allOf(orderFuture, paymentFuture, shippingFuture).join();
+        
+        return new CheckoutSummaryResponse(
+            orderFuture.join(),      // Throws if failed
+            paymentFuture.join(),    // Throws if failed
+            shippingFuture.join()    // Returns default if failed
+        );
+    }
+    
+    @CircuitBreaker(name = "shippingService")
+    private List<ShippingOptionDto> getShippingOptions(UUID orderId) {
+        return shippingClient.getShippingOptions(orderId);
+    }
+}
+```
+
+### Pattern 3: Degraded Response
+
+Return partial data with status indicator.
+
+```java
+public record DashboardResponse(
+    UserProfileDto user,
+    List<OrderDto> orders,
+    List<NotificationDto> notifications,
+    ServiceStatus serviceStatus  // Indicates which services succeeded
+) {
+    public enum ServiceStatus {
+        ALL_AVAILABLE,
+        PARTIAL_DEGRADED,
+        SEVERELY_DEGRADED
+    }
+}
+
+@Service
+public class DashboardAggregationService {
+    
+    public DashboardResponse getDashboard(UUID userId) {
+        var userFuture = CompletableFuture.supplyAsync(() -> getUserOrThrow(userId));
+        
+        var ordersFuture = CompletableFuture.supplyAsync(() -> getOrders(userId))
+            .exceptionally(ex -> {
+                log.warn("Orders unavailable", ex);
+                return List.<OrderDto>of();
+            });
+        
+        var notificationsFuture = CompletableFuture.supplyAsync(() -> getNotifications(userId))
+            .exceptionally(ex -> {
+                log.warn("Notifications unavailable", ex);
+                return List.<NotificationDto>of();
+            });
+        
+        CompletableFuture.allOf(userFuture, ordersFuture, notificationsFuture).join();
+        
+        var user = userFuture.join();
+        var orders = ordersFuture.join();
+        var notifications = notificationsFuture.join();
+        
+        // Determine status
+        var status = determineServiceStatus(orders, notifications);
+        
+        return new DashboardResponse(user, orders, notifications, status);
+    }
+    
+    private ServiceStatus determineServiceStatus(
+            List<OrderDto> orders,
+            List<NotificationDto> notifications) {
+        
+        var ordersAvailable = !orders.isEmpty();
+        var notificationsAvailable = !notifications.isEmpty();
+        
+        if (ordersAvailable && notificationsAvailable) {
+            return ServiceStatus.ALL_AVAILABLE;
+        } else if (!ordersAvailable && !notificationsAvailable) {
+            return ServiceStatus.SEVERELY_DEGRADED;
+        } else {
+            return ServiceStatus.PARTIAL_DEGRADED;
+        }
+    }
+}
+```
+
+## Timeout Handling
+
+### Per-Call Timeouts with CompletableFuture
+
+```java
+public DashboardResponse getDashboard(UUID userId) {
+    var timeout = Duration.ofSeconds(5);
+    
+    var ordersFuture = CompletableFuture.supplyAsync(
+        () -> orderClient.getUserOrders(userId)
+    ).orTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS)
+     .exceptionally(ex -> {
+         log.warn("Orders request timeout or failed", ex);
+         return List.<OrderDto>of();
+     });
+    
+    var userFuture = CompletableFuture.supplyAsync(
+        () -> userClient.getUserProfile(userId)
+    ).orTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS);
+    
+    CompletableFuture.allOf(ordersFuture, userFuture).join();
+    
+    return new DashboardResponse(userFuture.join(), ordersFuture.join());
+}
+```
+
+### Global Timeout for Aggregation
+
+```java
+public DashboardResponse getDashboard(UUID userId) {
+    var aggregationTimeout = Duration.ofSeconds(10);
+    
+    return CompletableFuture.supplyAsync(() -> {
+        var ordersFuture = CompletableFuture.supplyAsync(() -> getOrders(userId));
+        var userFuture = CompletableFuture.supplyAsync(() -> getUser(userId));
+        var notificationsFuture = CompletableFuture.supplyAsync(() -> getNotifications(userId));
+        
+        CompletableFuture.allOf(ordersFuture, userFuture, notificationsFuture).join();
+        
+        return new DashboardResponse(
+            userFuture.join(),
+            ordersFuture.join(),
+            notificationsFuture.join()
+        );
+    })
+    .orTimeout(aggregationTimeout.toMillis(), TimeUnit.MILLISECONDS)
+    .exceptionally(ex -> {
+        log.error("Dashboard aggregation timeout", ex);
+        throw new AggregationTimeoutException("Dashboard data unavailable", ex);
+    })
+    .join();
+}
+```
+
+## Response Transformation
+
+### Combining Multiple Backend DTOs
+
+```java
+// Backend DTOs
+public record OrderDto(UUID id, UUID userId, String status, List<OrderItemDto> items) {}
+public record OrderItemDto(UUID productId, int quantity, BigDecimal price) {}
+public record InventoryDto(UUID productId, int stockLevel, boolean available) {}
+
+// BFF Response
+public record OrderDetailResponse(
+    UUID orderId,
+    String status,
+    List<OrderItemDetail> items,
+    String totalAmount,
+    boolean fullyAvailable
+) {
+    public static OrderDetailResponse from(OrderDto order, List<InventoryDto> inventory) {
+        // Create inventory lookup map
+        var inventoryMap = inventory.stream()
+            .collect(Collectors.toMap(InventoryDto::productId, Function.identity()));
+        
+        // Transform items
+        var itemDetails = order.items().stream()
+            .map(item -> {
+                var inv = inventoryMap.get(item.productId());
+                return new OrderItemDetail(
+                    item.productId(),
+                    item.quantity(),
+                    "$" + item.price().setScale(2, RoundingMode.HALF_UP),
+                    inv != null ? inv.stockLevel() : 0,
+                    inv != null && inv.available()
+                );
+            })
+            .toList();
+        
+        // Calculate totals
+        var totalAmount = order.items().stream()
+            .map(item -> item.price().multiply(BigDecimal.valueOf(item.quantity())))
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        
+        // Check full availability
+        var fullyAvailable = itemDetails.stream()
+            .allMatch(OrderItemDetail::available);
+        
+        return new OrderDetailResponse(
+            order.id(),
+            order.status(),
+            itemDetails,
+            "$" + totalAmount.setScale(2, RoundingMode.HALF_UP),
+            fullyAvailable
+        );
+    }
+}
+
+public record OrderItemDetail(
+    UUID productId,
+    int quantity,
+    String price,
+    int stockLevel,
+    boolean available
+) {}
+```
+
+### Flattening Nested Structures
+
+```java
+// Backend nested structure
+public record UserDto(UUID id, String email, AddressDto address, ContactDto contact) {}
+public record AddressDto(String street, String city, String postalCode, String country) {}
+public record ContactDto(String phone, String mobile) {}
+
+// BFF flat response
+public record UserProfileResponse(
+    UUID userId,
+    String email,
+    String fullAddress,        // Flattened
+    String primaryPhone,       // Extracted
+    boolean hasCompleteProfile // Calculated
+) {
+    public static UserProfileResponse from(UserDto user) {
+        var fullAddress = String.format("%s, %s %s, %s",
+            user.address().street(),
+            user.address().city(),
+            user.address().postalCode(),
+            user.address().country()
+        );
+        
+        var primaryPhone = user.contact().mobile() != null 
+            ? user.contact().mobile() 
+            : user.contact().phone();
+        
+        var hasCompleteProfile = user.email() != null 
+            && user.address() != null 
+            && primaryPhone != null;
+        
+        return new UserProfileResponse(
+            user.id(),
+            user.email(),
+            fullAddress,
+            primaryPhone,
+            hasCompleteProfile
+        );
+    }
+}
+```
+
+## Caching Aggregated Responses
+
+```java
+@Service
+public class CachedAggregationService {
+    
+    private final OrderApiClient orderClient;
+    private final InventoryApiClient inventoryClient;
+    
+    @Cacheable(value = "orderDetails", key = "#orderId")
+    public OrderDetailResponse getOrderDetails(UUID orderId) {
+        log.info("Cache miss for order {}, fetching from backends", orderId);
+        
+        var order = orderClient.getOrder(orderId);
+        var productIds = order.items().stream()
+            .map(OrderItemDto::productId)
+            .toList();
+        
+        var inventory = inventoryClient.getInventoryForProducts(productIds);
+        
+        return OrderDetailResponse.from(order, inventory);
+    }
+    
+    @CacheEvict(value = "orderDetails", key = "#orderId")
+    public void invalidateOrderCache(UUID orderId) {
+        log.info("Invalidating cache for order {}", orderId);
+    }
+}
+```
+
+### Cache Configuration
+
+```java
+@Configuration
+@EnableCaching
+public class CacheConfig {
+    
+    @Bean
+    public CacheManager cacheManager() {
+        return new ConcurrentMapCacheManager(
+            "orderDetails",
+            "dashboards",
+            "userProfiles"
+        );
+    }
+}
+```
+
+```yaml
+# application.yml
+spring:
+  cache:
+    type: caffeine
+    caffeine:
+      spec: maximumSize=1000,expireAfterWrite=5m
+```
+
+## Conventions
+
+- Use **CompletableFuture.supplyAsync()** for parallel aggregation
+- Always handle **partial failures** gracefully
+- Set **timeouts** for aggregation operations
+- Log all backend call failures with correlation IDs
+- Transform backend DTOs to **client-friendly responses**
+- Cache aggregated responses when appropriate
+- Use **circuit breakers** for all backend calls
+- Return **degraded responses** instead of complete failures
+- With **virtual threads**, blocking I/O is efficient
+- Avoid thread pools with virtual threads (use default executors)
+
+**See also:** `bff-architecture.mdc`, `http-clients.mdc`, `resilience.mdc`, `error-handling.mdc`

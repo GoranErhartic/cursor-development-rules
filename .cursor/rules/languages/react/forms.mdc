@@ -1,0 +1,754 @@
+---
+description: "Form patterns - React Hook Form, controlled vs uncontrolled, validation integration"
+globs: ["**/forms/**/*.tsx", "**/*Form.tsx", "**/*.tsx"]
+---
+
+# Form Patterns
+
+## React Hook Form Setup
+
+```typescript
+// Basic form with React Hook Form
+import { useForm, SubmitHandler } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+
+const loginSchema = z.object({
+  email: z.string().email('Invalid email address'),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+});
+
+type LoginFormData = z.infer<typeof loginSchema>;
+
+export function LoginForm() {
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm<LoginFormData>({
+    resolver: zodResolver(loginSchema),
+    defaultValues: {
+      email: '',
+      password: '',
+    },
+  });
+
+  const onSubmit: SubmitHandler<LoginFormData> = async (data) => {
+    try {
+      await login(data);
+    } catch (error) {
+      console.error('Login failed:', error);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      <div>
+        <label htmlFor="email">Email</label>
+        <input
+          id="email"
+          type="email"
+          {...register('email')}
+          aria-invalid={!!errors.email}
+        />
+        {errors.email && (
+          <span className="error">{errors.email.message}</span>
+        )}
+      </div>
+
+      <div>
+        <label htmlFor="password">Password</label>
+        <input
+          id="password"
+          type="password"
+          {...register('password')}
+          aria-invalid={!!errors.password}
+        />
+        {errors.password && (
+          <span className="error">{errors.password.message}</span>
+        )}
+      </div>
+
+      <button type="submit" disabled={isSubmitting}>
+        {isSubmitting ? 'Logging in...' : 'Log In'}
+      </button>
+    </form>
+  );
+}
+```
+
+## Controlled Components
+
+```typescript
+// Manual controlled form
+function SignupForm() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const validate = (): boolean => {
+    const newErrors: Record<string, string> = {};
+
+    if (!email) {
+      newErrors.email = 'Email is required';
+    } else if (!/\S+@\S+\.\S+/.test(email)) {
+      newErrors.email = 'Email is invalid';
+    }
+
+    if (!password) {
+      newErrors.password = 'Password is required';
+    } else if (password.length < 8) {
+      newErrors.password = 'Password must be at least 8 characters';
+    }
+
+    if (password !== confirmPassword) {
+      newErrors.confirmPassword = 'Passwords must match';
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!validate()) return;
+
+    try {
+      await signup({ email, password });
+    } catch (error) {
+      setErrors({ _form: 'Signup failed. Please try again.' });
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <div>
+        <label htmlFor="email">Email</label>
+        <input
+          id="email"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          aria-invalid={!!errors.email}
+        />
+        {errors.email && <span className="error">{errors.email}</span>}
+      </div>
+
+      <div>
+        <label htmlFor="password">Password</label>
+        <input
+          id="password"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          aria-invalid={!!errors.password}
+        />
+        {errors.password && <span className="error">{errors.password}</span>}
+      </div>
+
+      <div>
+        <label htmlFor="confirmPassword">Confirm Password</label>
+        <input
+          id="confirmPassword"
+          type="password"
+          value={confirmPassword}
+          onChange={(e) => setConfirmPassword(e.target.value)}
+          aria-invalid={!!errors.confirmPassword}
+        />
+        {errors.confirmPassword && (
+          <span className="error">{errors.confirmPassword}</span>
+        )}
+      </div>
+
+      {errors._form && <div className="error">{errors._form}</div>}
+
+      <button type="submit">Sign Up</button>
+    </form>
+  );
+}
+```
+
+## Uncontrolled Components
+
+```typescript
+// Uncontrolled form with refs
+function QuickSearchForm() {
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const searchTerm = searchInputRef.current?.value || '';
+    performSearch(searchTerm);
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <input
+        ref={searchInputRef}
+        type="search"
+        placeholder="Search..."
+        defaultValue=""
+      />
+      <button type="submit">Search</button>
+    </form>
+  );
+}
+```
+
+## Complex Form with React Hook Form
+
+```typescript
+const userProfileSchema = z.object({
+  firstName: z.string().min(1, 'First name is required'),
+  lastName: z.string().min(1, 'Last name is required'),
+  email: z.string().email('Invalid email'),
+  age: z.number().min(18, 'Must be at least 18').max(120),
+  bio: z.string().max(500, 'Bio must be less than 500 characters').optional(),
+  avatar: z.instanceof(FileList).optional(),
+  preferences: z.object({
+    newsletter: z.boolean(),
+    notifications: z.boolean(),
+  }),
+  interests: z.array(z.string()).min(1, 'Select at least one interest'),
+});
+
+type UserProfileData = z.infer<typeof userProfileSchema>;
+
+function UserProfileForm({ user }: { user?: User }) {
+  const {
+    register,
+    handleSubmit,
+    watch,
+    setValue,
+    formState: { errors, isDirty, isSubmitting },
+  } = useForm<UserProfileData>({
+    resolver: zodResolver(userProfileSchema),
+    defaultValues: {
+      firstName: user?.firstName || '',
+      lastName: user?.lastName || '',
+      email: user?.email || '',
+      age: user?.age || 18,
+      bio: user?.bio || '',
+      preferences: {
+        newsletter: user?.preferences?.newsletter || false,
+        notifications: user?.preferences?.notifications || true,
+      },
+      interests: user?.interests || [],
+    },
+  });
+
+  const interests = watch('interests');
+
+  const onSubmit: SubmitHandler<UserProfileData> = async (data) => {
+    try {
+      const formData = new FormData();
+      
+      // Handle file upload
+      if (data.avatar && data.avatar.length > 0) {
+        formData.append('avatar', data.avatar[0]);
+      }
+
+      // Append other fields
+      Object.entries(data).forEach(([key, value]) => {
+        if (key !== 'avatar') {
+          formData.append(key, JSON.stringify(value));
+        }
+      });
+
+      await updateUserProfile(formData);
+    } catch (error) {
+      console.error('Failed to update profile:', error);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+      {/* Text inputs */}
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label htmlFor="firstName">First Name</label>
+          <input
+            id="firstName"
+            {...register('firstName')}
+            aria-invalid={!!errors.firstName}
+          />
+          {errors.firstName && (
+            <span className="error">{errors.firstName.message}</span>
+          )}
+        </div>
+
+        <div>
+          <label htmlFor="lastName">Last Name</label>
+          <input
+            id="lastName"
+            {...register('lastName')}
+            aria-invalid={!!errors.lastName}
+          />
+          {errors.lastName && (
+            <span className="error">{errors.lastName.message}</span>
+          )}
+        </div>
+      </div>
+
+      {/* Email */}
+      <div>
+        <label htmlFor="email">Email</label>
+        <input
+          id="email"
+          type="email"
+          {...register('email')}
+          aria-invalid={!!errors.email}
+        />
+        {errors.email && (
+          <span className="error">{errors.email.message}</span>
+        )}
+      </div>
+
+      {/* Number input */}
+      <div>
+        <label htmlFor="age">Age</label>
+        <input
+          id="age"
+          type="number"
+          {...register('age', { valueAsNumber: true })}
+          aria-invalid={!!errors.age}
+        />
+        {errors.age && (
+          <span className="error">{errors.age.message}</span>
+        )}
+      </div>
+
+      {/* Textarea */}
+      <div>
+        <label htmlFor="bio">Bio</label>
+        <textarea
+          id="bio"
+          rows={4}
+          {...register('bio')}
+          aria-invalid={!!errors.bio}
+        />
+        {errors.bio && (
+          <span className="error">{errors.bio.message}</span>
+        )}
+      </div>
+
+      {/* File input */}
+      <div>
+        <label htmlFor="avatar">Avatar</label>
+        <input
+          id="avatar"
+          type="file"
+          accept="image/*"
+          {...register('avatar')}
+        />
+      </div>
+
+      {/* Checkboxes */}
+      <fieldset>
+        <legend>Preferences</legend>
+        <div>
+          <label>
+            <input
+              type="checkbox"
+              {...register('preferences.newsletter')}
+            />
+            Subscribe to newsletter
+          </label>
+        </div>
+        <div>
+          <label>
+            <input
+              type="checkbox"
+              {...register('preferences.notifications')}
+            />
+            Enable notifications
+          </label>
+        </div>
+      </fieldset>
+
+      {/* Multi-select checkboxes */}
+      <fieldset>
+        <legend>Interests</legend>
+        {['Technology', 'Sports', 'Music', 'Art', 'Travel'].map((interest) => (
+          <div key={interest}>
+            <label>
+              <input
+                type="checkbox"
+                value={interest}
+                {...register('interests')}
+              />
+              {interest}
+            </label>
+          </div>
+        ))}
+        {errors.interests && (
+          <span className="error">{errors.interests.message}</span>
+        )}
+      </fieldset>
+
+      {/* Submit button */}
+      <div className="flex gap-4">
+        <button type="submit" disabled={!isDirty || isSubmitting}>
+          {isSubmitting ? 'Saving...' : 'Save Changes'}
+        </button>
+        <button type="button" onClick={() => window.history.back()}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+```
+
+## Dynamic Form Fields
+
+```typescript
+function DynamicFieldsForm() {
+  const { register, control, handleSubmit, formState: { errors } } = useForm({
+    defaultValues: {
+      contacts: [{ name: '', email: '' }],
+    },
+  });
+
+  const { fields, append, remove } = useFieldArray({
+    control,
+    name: 'contacts',
+  });
+
+  const onSubmit = (data: any) => {
+    console.log(data);
+  };
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)}>
+      {fields.map((field, index) => (
+        <div key={field.id} className="flex gap-4 items-start">
+          <div>
+            <input
+              {...register(`contacts.${index}.name` as const, {
+                required: 'Name is required',
+              })}
+              placeholder="Name"
+            />
+            {errors.contacts?.[index]?.name && (
+              <span className="error">
+                {errors.contacts[index]?.name?.message}
+              </span>
+            )}
+          </div>
+
+          <div>
+            <input
+              {...register(`contacts.${index}.email` as const, {
+                required: 'Email is required',
+                pattern: {
+                  value: /\S+@\S+\.\S+/,
+                  message: 'Invalid email',
+                },
+              })}
+              placeholder="Email"
+              type="email"
+            />
+            {errors.contacts?.[index]?.email && (
+              <span className="error">
+                {errors.contacts[index]?.email?.message}
+              </span>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => remove(index)}
+            disabled={fields.length === 1}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+
+      <button
+        type="button"
+        onClick={() => append({ name: '', email: '' })}
+      >
+        Add Contact
+      </button>
+
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+## Form with API Integration
+
+```typescript
+function CreatePostForm() {
+  const navigate = useNavigate();
+  const createPost = useMutation({
+    mutationFn: (data: CreatePostDto) => api.createPost(data),
+  });
+
+  const {
+    register,
+    handleSubmit,
+    setError,
+    formState: { errors, isSubmitting },
+  } = useForm<CreatePostDto>({
+    resolver: zodResolver(createPostSchema),
+  });
+
+  const onSubmit: SubmitHandler<CreatePostDto> = async (data) => {
+    try {
+      const post = await createPost.mutateAsync(data);
+      navigate(`/posts/${post.id}`);
+    } catch (error) {
+      if (error instanceof ValidationError) {
+        // Set field-specific errors from API
+        Object.entries(error.errors).forEach(([field, message]) => {
+          setError(field as keyof CreatePostDto, { 
+            message: message as string 
+          });
+        });
+      } else {
+        setError('root', {
+          message: 'Failed to create post. Please try again.',
+        });
+      }
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)}>
+      <div>
+        <label htmlFor="title">Title</label>
+        <input id="title" {...register('title')} />
+        {errors.title && <span className="error">{errors.title.message}</span>}
+      </div>
+
+      <div>
+        <label htmlFor="content">Content</label>
+        <textarea id="content" {...register('content')} rows={10} />
+        {errors.content && (
+          <span className="error">{errors.content.message}</span>
+        )}
+      </div>
+
+      {errors.root && (
+        <div className="error">{errors.root.message}</div>
+      )}
+
+      <button type="submit" disabled={isSubmitting}>
+        {isSubmitting ? 'Creating...' : 'Create Post'}
+      </button>
+    </form>
+  );
+}
+```
+
+## Reusable Form Components
+
+```typescript
+// Form field wrapper component
+interface FormFieldProps {
+  label: string;
+  error?: string;
+  required?: boolean;
+  children: React.ReactNode;
+}
+
+function FormField({ label, error, required, children }: FormFieldProps) {
+  return (
+    <div className="form-field">
+      <label className={cn(required && 'required')}>
+        {label}
+        {required && <span className="text-red-500 ml-1">*</span>}
+      </label>
+      {children}
+      {error && <span className="error">{error}</span>}
+    </div>
+  );
+}
+
+// Input component with React Hook Form integration
+interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
+  label: string;
+  error?: string;
+}
+
+export const Input = forwardRef<HTMLInputElement, InputProps>(
+  ({ label, error, required, ...props }, ref) => {
+    return (
+      <FormField label={label} error={error} required={required}>
+        <input
+          ref={ref}
+          className={cn('input', error && 'input-error')}
+          aria-invalid={!!error}
+          {...props}
+        />
+      </FormField>
+    );
+  }
+);
+
+// Usage
+function SimpleForm() {
+  const { register, handleSubmit, formState: { errors } } = useForm();
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)}>
+      <Input
+        label="Email"
+        type="email"
+        error={errors.email?.message as string}
+        required
+        {...register('email')}
+      />
+      <Input
+        label="Password"
+        type="password"
+        error={errors.password?.message as string}
+        required
+        {...register('password')}
+      />
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+## Form State Management
+
+```typescript
+// Watch specific fields
+function WatchExample() {
+  const { register, watch } = useForm();
+  const showPassword = watch('showPassword');
+  const password = watch('password');
+
+  return (
+    <div>
+      <input
+        type={showPassword ? 'text' : 'password'}
+        {...register('password')}
+      />
+      <label>
+        <input type="checkbox" {...register('showPassword')} />
+        Show password
+      </label>
+      <p>Password strength: {calculateStrength(password)}</p>
+    </div>
+  );
+}
+
+// Reset form
+function ResetExample() {
+  const { register, handleSubmit, reset } = useForm();
+
+  const onSubmit = async (data: any) => {
+    await saveData(data);
+    reset(); // Reset to default values
+  };
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)}>
+      {/* fields */}
+      <button type="submit">Submit</button>
+      <button type="button" onClick={() => reset()}>
+        Reset
+      </button>
+    </form>
+  );
+}
+
+// Set values programmatically
+function SetValueExample() {
+  const { register, setValue } = useForm();
+
+  useEffect(() => {
+    // Load user data
+    fetchUser().then(user => {
+      setValue('name', user.name);
+      setValue('email', user.email);
+    });
+  }, [setValue]);
+
+  return (
+    <form>
+      <input {...register('name')} />
+      <input {...register('email')} />
+    </form>
+  );
+}
+```
+
+## Async Validation
+
+```typescript
+const asyncSchema = z.object({
+  username: z
+    .string()
+    .min(3, 'Username must be at least 3 characters')
+    .refine(
+      async (username) => {
+        // Check if username is available
+        const available = await checkUsernameAvailability(username);
+        return available;
+      },
+      { message: 'Username is already taken' }
+    ),
+});
+
+function AsyncValidationForm() {
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isValidating },
+  } = useForm({
+    resolver: zodResolver(asyncSchema),
+    mode: 'onBlur', // Validate on blur for async validation
+  });
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)}>
+      <div>
+        <input {...register('username')} />
+        {isValidating && <span>Checking availability...</span>}
+        {errors.username && (
+          <span className="error">{errors.username.message}</span>
+        )}
+      </div>
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+## Best Practices
+
+- ✅ Use React Hook Form for complex forms
+- ✅ Integrate Zod for type-safe validation
+- ✅ Provide clear, accessible labels
+- ✅ Show validation errors near inputs
+- ✅ Disable submit button during submission
+- ✅ Handle API errors and display them appropriately
+- ✅ Reset form after successful submission
+- ✅ Use appropriate input types (email, number, date, etc.)
+- ✅ Provide loading states for async operations
+- ✅ Implement proper ARIA attributes for accessibility
+
+## Anti-Patterns
+
+- ❌ Validating on every keystroke (use onBlur or onSubmit)
+- ❌ Not disabling submit during submission
+- ❌ Generic error messages
+- ❌ Not handling API validation errors
+- ❌ Manually managing form state when React Hook Form can do it
+- ❌ Not providing visual feedback for validation
+- ❌ Using uncontrolled inputs with complex validation
+- ❌ Not resetting form after successful submission
+- ❌ Missing labels or poor accessibility
+- ❌ Not sanitizing user input
+
+**See also:** `validation.mdc`, `input-sanitization.mdc`, `components.mdc`, `accessibility.mdc`

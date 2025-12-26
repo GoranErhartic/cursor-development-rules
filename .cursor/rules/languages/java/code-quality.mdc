@@ -1,11 +1,11 @@
 ---
-description: "Code quality standards - Java 21 idioms, naming conventions, records, sealed classes"
+description: "Code quality standards - Java 21 LTS idioms, naming conventions, records, sealed classes, virtual threads"
 globs: ["**/*.java"]
 ---
 
 # Code Quality Standards
 
-## Java 21 Idioms
+## Java 21 LTS Best Practices
 
 ### Use Records for DTOs and Value Objects
 ```java
@@ -116,6 +116,127 @@ List<String> activeEmails = users.stream()
 var user = userRepository.findById(id).orElseThrow();
 var query = entityManager.createQuery("SELECT u FROM User u", User.class);
 ```
+
+## HTTP Clients (RestClient)
+
+### Use RestClient for HTTP Calls
+
+**Spring Boot 3.2+ provides RestClient** — a modern, fluent HTTP client that replaces RestTemplate.
+
+```java
+// GOOD - RestClient with builder pattern
+@Service
+public class UserApiClient {
+    
+    private final RestClient restClient;
+    
+    public UserApiClient(RestClient.Builder restClientBuilder) {
+        this.restClient = restClientBuilder
+            .baseUrl("https://api.example.com")
+            .defaultHeader("Accept", "application/json")
+            .build();
+    }
+    
+    public UserDto getUser(UUID userId) {
+        return restClient.get()
+            .uri("/users/{id}", userId)
+            .retrieve()
+            .body(UserDto.class);
+    }
+}
+
+// AVOID - RestTemplate (legacy)
+@Service
+public class LegacyUserClient {
+    private final RestTemplate restTemplate = new RestTemplate(); // Don't use
+}
+```
+
+### Declarative HTTP Interface
+
+```java
+// Define interface
+public interface UserApiClient {
+    
+    @GetExchange("/users/{id}")
+    UserDto getUser(@PathVariable UUID id);
+    
+    @PostExchange("/users")
+    UserDto createUser(@RequestBody CreateUserRequest request);
+}
+
+// Configure as bean
+@Configuration
+public class HttpClientConfig {
+    
+    @Bean
+    public UserApiClient userApiClient(RestClient.Builder builder) {
+        var restClient = builder
+            .baseUrl("https://api.example.com")
+            .build();
+        
+        var factory = HttpServiceProxyFactory
+            .builderFor(RestClientAdapter.create(restClient))
+            .build();
+        
+        return factory.createClient(UserApiClient.class);
+    }
+}
+```
+
+## Virtual Threads
+
+### Enable Virtual Threads
+
+**Java 21+ with Spring Boot 3.2+** supports virtual threads for improved scalability.
+
+```yaml
+# application.yml
+spring:
+  threads:
+    virtual:
+      enabled: true
+```
+
+### Virtual Thread Considerations
+
+```java
+// Virtual threads work seamlessly with blocking operations
+@Service
+public class OrderService {
+    
+    private final RestClient restClient;
+    
+    // This method runs on a virtual thread when called from a controller
+    public OrderDto getOrder(UUID orderId) {
+        // Blocking I/O - efficient with virtual threads
+        return restClient.get()
+            .uri("/orders/{id}", orderId)
+            .retrieve()
+            .body(OrderDto.class);
+    }
+}
+
+// Use CompletableFuture for parallel operations
+public CompletableFuture<OrderSummary> getOrderSummary(UUID orderId) {
+    var orderFuture = CompletableFuture.supplyAsync(
+        () -> orderClient.getOrder(orderId)
+    );
+    
+    var itemsFuture = CompletableFuture.supplyAsync(
+        () -> itemClient.getItems(orderId)
+    );
+    
+    return orderFuture.thenCombine(itemsFuture, 
+        (order, items) -> new OrderSummary(order, items));
+}
+```
+
+**Guidelines:**
+- Virtual threads are suitable for I/O-bound operations (database, HTTP calls)
+- Avoid thread pools with virtual threads (use direct execution)
+- Don't use `ThreadLocal` extensively (creates overhead)
+- Blocking operations are fine — virtual threads handle them efficiently
 
 ## Boy Scout Rule
 

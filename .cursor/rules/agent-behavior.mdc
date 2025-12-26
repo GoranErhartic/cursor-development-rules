@@ -17,6 +17,29 @@ Act as a **Senior Principal Backend Engineer** with 20+ years of experience in e
 - CLARIFY ambiguous requirements — present options and wait for guidance
 - FLAG uncertainties explicitly rather than making silent assumptions
 
+## Documentation Research
+
+**Always consult context7 MCP server for library/package/framework information.**
+
+When you need to understand or use any library, package, or framework:
+
+1. **Use context7 first** - Query the MCP server for up-to-date documentation
+2. **Resolve library ID** - Use `resolve-library-id` to find the correct library
+3. **Get documentation** - Use `get-library-docs` with appropriate mode:
+   - `mode='code'` - For API references, code examples, specific methods
+   - `mode='info'` - For concepts, architecture, getting started guides
+4. **Verify current practices** - Documentation from context7 is authoritative
+
+**Do NOT:**
+- Rely solely on training data for library-specific details
+- Guess at API signatures or method names
+- Use outdated patterns when current docs are available
+
+**Example scenarios:**
+- Adding a new dependency → Query context7 for latest usage patterns
+- Debugging library behavior → Check context7 for current API documentation
+- Implementing framework features → Consult context7 for best practices
+
 ## TDD Workflow
 
 **Test-First Development is the default approach.**

@@ -1,0 +1,405 @@
+---
+description: "BFF (Backend-For-Frontend) architectural patterns - layer responsibilities, aggregation, token pass-through"
+globs: ["**/bff/**/*.java", "**/*BffController*.java", "**/*Aggregation*.java", "**/*Facade*.java"]
+---
+
+# BFF Architecture Patterns
+
+## What is a BFF?
+
+A **Backend-For-Frontend (BFF)** is a service layer that sits between a client application and backend microservices. It:
+
+- **Aggregates** data from multiple backend APIs
+- **Transforms** backend responses to client-specific formats
+- **Handles** authentication token pass-through or exchange
+- **Provides** client-optimized endpoints
+- **Shields** frontend from backend complexity
+
+## BFF Layer Responsibilities
+
+| Responsibility | BFF Layer | Backend APIs |
+|----------------|-----------|--------------|
+| Authentication | Token validation & pass-through | Service-specific authorization |
+| Aggregation | Combine multiple API responses | Return domain-specific data |
+| Transformation | Convert to client-friendly DTOs | Return service DTOs |
+| Caching | Cache aggregated responses | Domain data caching |
+| Error Handling | User-friendly errors | Domain errors |
+| Rate Limiting | Client rate limiting | Service protection |
+
+## Package Structure
+
+```
+src/main/java/com/example/bff/
+├── config/
+│   ├── SecurityConfig.java           # JWT validation, CORS
+│   ├── HttpClientConfig.java         # RestClient beans
+│   └── ResilienceConfig.java         # Circuit breaker config
+├── controller/
+│   ├── OrderController.java          # BFF endpoints
+│   └── UserController.java
+├── service/
+│   ├── OrderAggregationService.java  # Aggregation logic
+│   └── UserAggregationService.java
+├── client/
+│   ├── order/
+│   │   ├── OrderApiClient.java       # Declarative interface
+│   │   └── dto/
+│   │       ├── OrderDto.java         # Backend DTO
+│   │       └── OrderItemDto.java
+│   └── inventory/
+│       ├── InventoryApiClient.java
+│       └── dto/
+│           └── InventoryDto.java
+├── dto/
+│   ├── request/
+│   │   └── CreateOrderRequest.java   # BFF request
+│   └── response/
+│       └── OrderSummaryResponse.java # Aggregated response
+└── exception/
+    ├── BackendServiceException.java
+    └── AggregationException.java
+```
+
+## Token Pass-Through Strategy
+
+### JWT Pass-Through Configuration
+
+```java
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+    
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        http
+            .csrf(csrf -> csrf.disable())
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/actuator/health").permitAll()
+                .anyRequest().authenticated()
+            )
+            .oauth2ResourceServer(oauth2 -> oauth2
+                .jwt(Customizer.withDefaults())
+            );
+        
+        return http.build();
+    }
+}
+```
+
+### Pass Token to Backend Clients
+
+```java
+@Component
+public class TokenPropagationInterceptor implements ClientHttpRequestInterceptor {
+    
+    @Override
+    public ClientHttpResponse intercept(
+            HttpRequest request, 
+            byte[] body, 
+            ClientHttpRequestExecution execution) throws IOException {
+        
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        
+        if (authentication instanceof JwtAuthenticationToken jwtAuth) {
+            var token = jwtAuth.getToken().getTokenValue();
+            request.getHeaders().setBearerAuth(token);
+        }
+        
+        return execution.execute(request, body);
+    }
+}
+
+@Configuration
+public class HttpClientConfig {
+    
+    @Bean
+    public RestClient.Builder restClientBuilder(TokenPropagationInterceptor tokenInterceptor) {
+        return RestClient.builder()
+            .requestInterceptor(tokenInterceptor);
+    }
+}
+```
+
+## Request Aggregation Patterns
+
+### Sequential Aggregation
+
+Use when second call depends on the first:
+
+```java
+@Service
+public class OrderAggregationService {
+    
+    private final OrderApiClient orderClient;
+    private final InventoryApiClient inventoryClient;
+    
+    public OrderAggregationService(
+            OrderApiClient orderClient,
+            InventoryApiClient inventoryClient) {
+        this.orderClient = orderClient;
+        this.inventoryClient = inventoryClient;
+    }
+    
+    public OrderSummaryResponse getOrderSummary(UUID orderId) {
+        // Call 1: Get order details
+        var order = orderClient.getOrder(orderId);
+        
+        // Call 2: Get inventory for order items (depends on order)
+        var itemIds = order.items().stream()
+            .map(OrderItemDto::productId)
+            .toList();
+        
+        var inventory = inventoryClient.getInventoryForProducts(itemIds);
+        
+        // Transform and combine
+        return OrderSummaryResponse.from(order, inventory);
+    }
+}
+```
+
+### Parallel Aggregation
+
+Use when calls are independent:
+
+```java
+@Service
+public class DashboardAggregationService {
+    
+    private final OrderApiClient orderClient;
+    private final UserApiClient userClient;
+    private final NotificationApiClient notificationClient;
+    
+    public DashboardAggregationService(
+            OrderApiClient orderClient,
+            UserApiClient userClient,
+            NotificationApiClient notificationClient) {
+        this.orderClient = orderClient;
+        this.userClient = userClient;
+        this.notificationClient = notificationClient;
+    }
+    
+    public DashboardResponse getDashboard(UUID userId) {
+        // Execute all calls in parallel using CompletableFuture
+        var ordersFuture = CompletableFuture.supplyAsync(
+            () -> orderClient.getUserOrders(userId)
+        );
+        
+        var userFuture = CompletableFuture.supplyAsync(
+            () -> userClient.getUserProfile(userId)
+        );
+        
+        var notificationsFuture = CompletableFuture.supplyAsync(
+            () -> notificationClient.getNotifications(userId)
+        );
+        
+        // Wait for all to complete
+        CompletableFuture.allOf(ordersFuture, userFuture, notificationsFuture).join();
+        
+        // Get results
+        var orders = ordersFuture.join();
+        var user = userFuture.join();
+        var notifications = notificationsFuture.join();
+        
+        return new DashboardResponse(user, orders, notifications);
+    }
+}
+```
+
+### Parallel Aggregation with Partial Failure
+
+```java
+@Service
+public class ResilientAggregationService {
+    
+    @CircuitBreaker(name = "orderService", fallbackMethod = "ordersFallback")
+    public List<OrderDto> getOrders(UUID userId) {
+        return orderClient.getUserOrders(userId);
+    }
+    
+    @CircuitBreaker(name = "notificationService", fallbackMethod = "notificationsFallback")
+    public List<NotificationDto> getNotifications(UUID userId) {
+        return notificationClient.getNotifications(userId);
+    }
+    
+    public DashboardResponse getDashboard(UUID userId) {
+        // These methods have circuit breakers with fallbacks
+        var ordersFuture = CompletableFuture.supplyAsync(() -> getOrders(userId));
+        var notificationsFuture = CompletableFuture.supplyAsync(() -> getNotifications(userId));
+        
+        // If one service fails, we still get data from the other
+        CompletableFuture.allOf(ordersFuture, notificationsFuture).join();
+        
+        return new DashboardResponse(
+            ordersFuture.join(),      // May return empty list from fallback
+            notificationsFuture.join() // May return empty list from fallback
+        );
+    }
+    
+    // Fallback methods
+    private List<OrderDto> ordersFallback(UUID userId, Throwable t) {
+        log.warn("Order service unavailable, returning empty list", t);
+        return List.of();
+    }
+    
+    private List<NotificationDto> notificationsFallback(UUID userId, Throwable t) {
+        log.warn("Notification service unavailable, returning empty list", t);
+        return List.of();
+    }
+}
+```
+
+## Response Transformation
+
+### Backend DTO → BFF Response
+
+```java
+// Backend DTOs (from API clients)
+public record OrderDto(
+    UUID id,
+    UUID userId,
+    LocalDateTime createdAt,
+    String status,
+    List<OrderItemDto> items
+) {}
+
+public record OrderItemDto(
+    UUID productId,
+    int quantity,
+    BigDecimal unitPrice
+) {}
+
+// BFF Response (client-optimized)
+public record OrderSummaryResponse(
+    UUID orderId,
+    String orderDate,           // Formatted date
+    String status,
+    int totalItems,             // Calculated
+    String totalAmount,         // Formatted currency
+    List<OrderItemSummary> items
+) {
+    public static OrderSummaryResponse from(OrderDto order) {
+        var totalItems = order.items().stream()
+            .mapToInt(OrderItemDto::quantity)
+            .sum();
+        
+        var totalAmount = order.items().stream()
+            .map(item -> item.unitPrice().multiply(BigDecimal.valueOf(item.quantity())))
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        
+        var formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+        
+        return new OrderSummaryResponse(
+            order.id(),
+            order.createdAt().format(formatter),
+            order.status(),
+            totalItems,
+            "$" + totalAmount.setScale(2, RoundingMode.HALF_UP),
+            order.items().stream()
+                .map(OrderItemSummary::from)
+                .toList()
+        );
+    }
+}
+
+public record OrderItemSummary(
+    UUID productId,
+    int quantity,
+    String price
+) {
+    static OrderItemSummary from(OrderItemDto item) {
+        return new OrderItemSummary(
+            item.productId(),
+            item.quantity(),
+            "$" + item.unitPrice().setScale(2, RoundingMode.HALF_UP)
+        );
+    }
+}
+```
+
+## BFF Controller Patterns
+
+### Endpoint Design
+
+```java
+@RestController
+@RequestMapping("/api/bff")
+@Validated
+public class OrderBffController {
+    
+    private final OrderAggregationService aggregationService;
+    
+    public OrderBffController(OrderAggregationService aggregationService) {
+        this.aggregationService = aggregationService;
+    }
+    
+    // BFF-specific endpoint (aggregates multiple backend calls)
+    @GetMapping("/orders/{orderId}/summary")
+    public ResponseEntity<OrderSummaryResponse> getOrderSummary(
+            @PathVariable UUID orderId,
+            @AuthenticationPrincipal Jwt jwt) {
+        
+        var summary = aggregationService.getOrderSummary(orderId);
+        return ResponseEntity.ok(summary);
+    }
+    
+    // Dashboard endpoint (heavy aggregation)
+    @GetMapping("/dashboard")
+    public ResponseEntity<DashboardResponse> getDashboard(
+            @AuthenticationPrincipal Jwt jwt) {
+        
+        var userId = UUID.fromString(jwt.getSubject());
+        var dashboard = aggregationService.getDashboard(userId);
+        return ResponseEntity.ok(dashboard);
+    }
+}
+```
+
+## Error Handling in BFF
+
+```java
+@RestControllerAdvice
+public class BffExceptionHandler {
+    
+    @ExceptionHandler(BackendServiceException.class)
+    public ResponseEntity<ProblemDetail> handleBackendServiceException(
+            BackendServiceException ex) {
+        
+        var problemDetail = ProblemDetail.forStatusAndDetail(
+            HttpStatus.SERVICE_UNAVAILABLE,
+            "Backend service is temporarily unavailable"
+        );
+        problemDetail.setTitle("Service Unavailable");
+        problemDetail.setProperty("service", ex.getServiceName());
+        
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(problemDetail);
+    }
+    
+    @ExceptionHandler(AggregationException.class)
+    public ResponseEntity<ProblemDetail> handleAggregationException(
+            AggregationException ex) {
+        
+        var problemDetail = ProblemDetail.forStatusAndDetail(
+            HttpStatus.INTERNAL_SERVER_ERROR,
+            "Failed to aggregate data from backend services"
+        );
+        problemDetail.setTitle("Aggregation Error");
+        problemDetail.setProperty("failedServices", ex.getFailedServices());
+        
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(problemDetail);
+    }
+}
+```
+
+## Conventions
+
+- BFF endpoints should be client-specific, not generic pass-throughs
+- Use meaningful BFF paths (e.g., `/api/bff/dashboard`, not `/api/orders`)
+- Always transform backend DTOs to client-friendly responses
+- Implement circuit breakers for all backend calls
+- Support partial failures gracefully (return what you can)
+- Use parallel aggregation when calls are independent
+- Pass authentication tokens to backends
+- Cache aggregated responses when appropriate
+- Keep BFF logic thin — it's a facade, not a domain layer
+
+**See also:** `http-clients.mdc`, `aggregation.mdc`, `resilience.mdc`, `auth.mdc`, `error-handling.mdc`

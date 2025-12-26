@@ -118,3 +118,4 @@ Write-Host "  1. Restart Cursor or reload the workspace"
 Write-Host "  2. The rules will be automatically applied to your AI sessions"
 Write-Host ""
 
+

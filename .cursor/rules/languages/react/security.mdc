@@ -1,0 +1,634 @@
+---
+description: "Security practices - XSS prevention, CSP, secure storage, CORS handling, authentication"
+globs: ["**/*.tsx", "**/*.ts"]
+---
+
+# Security Practices
+
+## Critical Rules
+
+- **NEVER expose secrets, API keys, or credentials in code**
+- **NEVER commit secrets to source control**
+- **ALWAYS use HTTPS in production**
+- **ALWAYS validate and sanitize user input**
+- **NEVER trust data from external sources**
+
+## XSS (Cross-Site Scripting) Prevention
+
+### React's Built-in Protection
+```typescript
+// SAFE - React escapes by default
+function UserProfile({ user }: { user: User }) {
+  return (
+    <div>
+      <h1>{user.name}</h1> {/* Automatically escaped */}
+      <p>{user.bio}</p>
+    </div>
+  );
+}
+
+// DANGEROUS - dangerouslySetInnerHTML bypasses escaping
+function UnsafeComponent({ html }: { html: string }) {
+  return <div dangerouslySetInnerHTML={{ __html: html }} />; // ❌ NEVER DO THIS
+}
+```
+
+### Safe HTML Rendering with DOMPurify
+```typescript
+import DOMPurify from 'dompurify';
+
+function SafeHTML({ html }: { html: string }) {
+  const sanitized = DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: ['b', 'i', 'em', 'strong', 'a', 'p', 'br'],
+    ALLOWED_ATTR: ['href', 'target', 'rel'],
+    ALLOW_DATA_ATTR: false,
+  });
+
+  return <div dangerouslySetInnerHTML={{ __html: sanitized }} />;
+}
+
+// For rich text editors
+function RichTextDisplay({ content }: { content: string }) {
+  const clean = DOMPurify.sanitize(content, {
+    ALLOWED_TAGS: ['h1', 'h2', 'h3', 'p', 'ul', 'ol', 'li', 'strong', 'em', 'a'],
+    ALLOWED_ATTR: ['href', 'target'],
+    ALLOWED_URI_REGEXP: /^https?:\/\//i,
+  });
+
+  return <div dangerouslySetInnerHTML={{ __html: clean }} />;
+}
+```
+
+### URL Safety
+```typescript
+// DANGEROUS - User-controlled href
+function UnsafeLink({ url }: { url: string }) {
+  return <a href={url}>Click here</a>; // ❌ Vulnerable to javascript: URLs
+}
+
+// SAFE - Validate protocol
+function SafeLink({ url, children }: { url: string; children: React.ReactNode }) {
+  const isValidUrl = (url: string): boolean => {
+    try {
+      const parsed = new URL(url);
+      return ['http:', 'https:'].includes(parsed.protocol);
+    } catch {
+      return false;
+    }
+  };
+
+  if (!isValidUrl(url)) {
+    return <span>{children}</span>;
+  }
+
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer" // Prevents tabnabbing
+    >
+      {children}
+    </a>
+  );
+}
+```
+
+## Content Security Policy (CSP)
+
+### Vite Configuration
+```typescript
+// vite.config.ts
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [
+    react(),
+    {
+      name: 'csp-headers',
+      configureServer(server) {
+        server.middlewares.use((_req, res, next) => {
+          res.setHeader(
+            'Content-Security-Policy',
+            [
+              "default-src 'self'",
+              "script-src 'self' 'unsafe-inline'", // Allow inline scripts in dev
+              "style-src 'self' 'unsafe-inline'",
+              "img-src 'self' data: https:",
+              "font-src 'self'",
+              "connect-src 'self' https://api.example.com",
+              "frame-ancestors 'none'",
+              "base-uri 'self'",
+              "form-action 'self'",
+            ].join('; ')
+          );
+          next();
+        });
+      },
+    },
+  ],
+});
+```
+
+### Production CSP (Nginx)
+```nginx
+# nginx.conf
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-...'; style-src 'self' 'sha256-...'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' https://api.example.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+```
+
+## Secure Storage
+
+### LocalStorage Security
+```typescript
+// NEVER store sensitive data in localStorage
+// ❌ BAD
+localStorage.setItem('authToken', token);
+localStorage.setItem('password', password);
+localStorage.setItem('creditCard', cardNumber);
+
+// ✅ GOOD - Use httpOnly cookies for tokens
+// Set by server with Set-Cookie header:
+// Set-Cookie: token=...; HttpOnly; Secure; SameSite=Strict
+
+// For non-sensitive data, encrypt if needed
+import CryptoJS from 'crypto-js';
+
+const STORAGE_KEY = 'app_preferences';
+const ENCRYPTION_KEY = 'your-encryption-key'; // Should come from env
+
+export const secureStorage = {
+  set: (key: string, value: any) => {
+    const encrypted = CryptoJS.AES.encrypt(
+      JSON.stringify(value),
+      ENCRYPTION_KEY
+    ).toString();
+    localStorage.setItem(`${STORAGE_KEY}_${key}`, encrypted);
+  },
+  
+  get: (key: string) => {
+    const encrypted = localStorage.getItem(`${STORAGE_KEY}_${key}`);
+    if (!encrypted) return null;
+    
+    try {
+      const decrypted = CryptoJS.AES.decrypt(encrypted, ENCRYPTION_KEY);
+      return JSON.parse(decrypted.toString(CryptoJS.enc.Utf8));
+    } catch {
+      return null;
+    }
+  },
+  
+  remove: (key: string) => {
+    localStorage.removeItem(`${STORAGE_KEY}_${key}`);
+  },
+};
+```
+
+### Session Storage
+```typescript
+// Prefer sessionStorage for temporary sensitive data
+// Cleared when tab is closed
+function useSessionState<T>(key: string, defaultValue: T) {
+  const [state, setState] = useState<T>(() => {
+    try {
+      const item = sessionStorage.getItem(key);
+      return item ? JSON.parse(item) : defaultValue;
+    } catch {
+      return defaultValue;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(key, JSON.stringify(state));
+    } catch (error) {
+      console.error('Failed to save to sessionStorage:', error);
+    }
+  }, [key, state]);
+
+  return [state, setState] as const;
+}
+```
+
+## Authentication & Authorization
+
+### Token Management
+```typescript
+// auth.ts
+interface AuthTokens {
+  accessToken: string;
+  refreshToken: string;
+}
+
+class AuthService {
+  private accessToken: string | null = null;
+
+  // Store access token in memory only
+  setAccessToken(token: string) {
+    this.accessToken = token;
+  }
+
+  getAccessToken(): string | null {
+    return this.accessToken;
+  }
+
+  clearTokens() {
+    this.accessToken = null;
+  }
+
+  // Refresh token stored in httpOnly cookie by server
+  async refreshAccessToken(): Promise<string> {
+    const response = await fetch('/api/auth/refresh', {
+      method: 'POST',
+      credentials: 'include', // Send httpOnly cookie
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to refresh token');
+    }
+
+    const { accessToken } = await response.json();
+    this.setAccessToken(accessToken);
+    return accessToken;
+  }
+}
+
+export const authService = new AuthService();
+```
+
+### Protected API Calls
+```typescript
+// api/client.ts
+import { authService } from './auth';
+
+async function fetchWithAuth(
+  url: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const token = authService.getAccessToken();
+
+  const headers = new Headers(options.headers);
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  const response = await fetch(url, {
+    ...options,
+    headers,
+    credentials: 'include', // Include cookies
+  });
+
+  // Handle token refresh
+  if (response.status === 401) {
+    try {
+      const newToken = await authService.refreshAccessToken();
+      headers.set('Authorization', `Bearer ${newToken}`);
+      
+      // Retry request
+      return fetch(url, {
+        ...options,
+        headers,
+        credentials: 'include',
+      });
+    } catch {
+      // Refresh failed, redirect to login
+      authService.clearTokens();
+      window.location.href = '/login';
+      throw new Error('Authentication failed');
+    }
+  }
+
+  return response;
+}
+```
+
+### Route Protection
+```typescript
+// components/RequireAuth.tsx
+import { Navigate, useLocation } from 'react-router';
+
+interface RequireAuthProps {
+  children: React.ReactNode;
+  permissions?: string[];
+}
+
+export function RequireAuth({ children, permissions = [] }: RequireAuthProps) {
+  const { user, isLoading } = useAuth();
+  const location = useLocation();
+
+  if (isLoading) {
+    return <LoadingSpinner />;
+  }
+
+  if (!user) {
+    // Redirect to login, save attempted location
+    return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+
+  // Check permissions
+  if (permissions.length > 0) {
+    const hasPermission = permissions.every(perm =>
+      user.permissions.includes(perm)
+    );
+
+    if (!hasPermission) {
+      return <Navigate to="/forbidden" replace />;
+    }
+  }
+
+  return <>{children}</>;
+}
+```
+
+## CORS Handling
+
+### Development Proxy (Vite)
+```typescript
+// vite.config.ts
+export default defineConfig({
+  server: {
+    proxy: {
+      '/api': {
+        target: 'https://api.example.com',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
+    },
+  },
+});
+```
+
+### Fetch with Credentials
+```typescript
+// Include cookies in cross-origin requests
+async function fetchWithCredentials(url: string) {
+  const response = await fetch(url, {
+    method: 'GET',
+    credentials: 'include', // Send cookies
+    mode: 'cors',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  return response.json();
+}
+```
+
+## Security Headers
+
+### Response Security
+```typescript
+// Check security headers
+function checkSecurityHeaders(response: Response) {
+  const requiredHeaders = [
+    'X-Content-Type-Options',
+    'X-Frame-Options',
+    'Strict-Transport-Security',
+  ];
+
+  requiredHeaders.forEach(header => {
+    if (!response.headers.has(header)) {
+      console.warn(`Missing security header: ${header}`);
+    }
+  });
+}
+```
+
+## Input Validation
+
+### File Upload Security
+```typescript
+interface FileUploadProps {
+  onUpload: (file: File) => Promise<void>;
+}
+
+function SecureFileUpload({ onUpload }: FileUploadProps) {
+  const [error, setError] = useState<string | null>(null);
+
+  const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+  const MAX_SIZE = 5 * 1024 * 1024; // 5MB
+
+  const validateFile = (file: File): string | null => {
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      return 'Invalid file type. Only JPEG, PNG, and WebP are allowed.';
+    }
+
+    if (file.size > MAX_SIZE) {
+      return 'File is too large. Maximum size is 5MB.';
+    }
+
+    return null;
+  };
+
+  const handleChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const validationError = validateFile(file);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
+    setError(null);
+
+    try {
+      await onUpload(file);
+    } catch (error) {
+      setError('Upload failed. Please try again.');
+    }
+  };
+
+  return (
+    <div>
+      <input
+        type="file"
+        accept={ALLOWED_TYPES.join(',')}
+        onChange={handleChange}
+      />
+      {error && <span className="error">{error}</span>}
+    </div>
+  );
+}
+```
+
+### SQL Injection Prevention
+```typescript
+// NEVER construct queries from user input
+// ❌ BAD - Server-side example (for reference)
+const query = `SELECT * FROM users WHERE email = '${userEmail}'`;
+
+// ✅ GOOD - Use parameterized queries (backend)
+// Frontend: Just send data to API, let backend handle it
+async function searchUsers(searchTerm: string) {
+  const response = await fetch('/api/users/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query: searchTerm }),
+  });
+  
+  return response.json();
+}
+```
+
+## Environment Variables
+
+### Vite Environment Variables
+```typescript
+// .env
+VITE_API_URL=https://api.example.com
+VITE_PUBLIC_KEY=pk_test_...
+
+# NEVER prefix sensitive data with VITE_
+# Only VITE_ prefixed vars are exposed to client
+```
+
+```typescript
+// env.ts
+import { z } from 'zod';
+
+const envSchema = z.object({
+  VITE_API_URL: z.string().url(),
+  VITE_PUBLIC_KEY: z.string().min(1),
+  MODE: z.enum(['development', 'production', 'test']),
+});
+
+export const env = envSchema.parse({
+  VITE_API_URL: import.meta.env.VITE_API_URL,
+  VITE_PUBLIC_KEY: import.meta.env.VITE_PUBLIC_KEY,
+  MODE: import.meta.env.MODE,
+});
+
+// Usage
+console.log(env.VITE_API_URL); // Type-safe and validated
+```
+
+### Secrets Management
+```typescript
+// NEVER commit .env to git
+// Add to .gitignore:
+.env
+.env.local
+.env.*.local
+
+// Use different files for different environments
+.env                 # Base configuration (can be committed)
+.env.local          # Local overrides (never commit)
+.env.development    # Development config (can be committed)
+.env.production     # Production config (never commit sensitive values)
+```
+
+## Rate Limiting & Throttling
+
+### Client-Side Throttling
+```typescript
+import { throttle } from 'lodash-es';
+
+function SearchInput() {
+  const [query, setQuery] = useState('');
+
+  // Throttle API calls
+  const performSearch = throttle(async (searchTerm: string) => {
+    if (searchTerm.length < 3) return;
+    await searchAPI(searchTerm);
+  }, 1000);
+
+  useEffect(() => {
+    performSearch(query);
+  }, [query, performSearch]);
+
+  return (
+    <input
+      value={query}
+      onChange={(e) => setQuery(e.target.value)}
+    />
+  );
+}
+```
+
+## Third-Party Scripts
+
+### Safe Script Loading
+```typescript
+// Use Helmet or similar for CSP
+import { Helmet } from 'react-helmet-async';
+
+function Analytics() {
+  return (
+    <Helmet>
+      <script
+        src="https://trusted-analytics.com/script.js"
+        integrity="sha384-..."
+        crossOrigin="anonymous"
+      />
+    </Helmet>
+  );
+}
+
+// Load scripts dynamically with verification
+function loadScript(src: string, integrity?: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    
+    if (integrity) {
+      script.integrity = integrity;
+      script.crossOrigin = 'anonymous';
+    }
+    
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
+    
+    document.body.appendChild(script);
+  });
+}
+```
+
+## Best Practices
+
+- ✅ Use HTTPS everywhere
+- ✅ Implement CSP headers
+- ✅ Store tokens in httpOnly cookies (server-side)
+- ✅ Validate all user input
+- ✅ Sanitize HTML before rendering
+- ✅ Use `rel="noopener noreferrer"` for external links
+- ✅ Implement proper CORS policies
+- ✅ Validate file uploads (type, size)
+- ✅ Use environment variables for configuration
+- ✅ Keep dependencies updated
+- ✅ Implement rate limiting
+- ✅ Log security events
+- ✅ Use SRI (Subresource Integrity) for CDN resources
+
+## Anti-Patterns
+
+- ❌ Storing tokens in localStorage
+- ❌ Using `dangerouslySetInnerHTML` without sanitization
+- ❌ Exposing API keys in client code
+- ❌ Trusting client-side validation only
+- ❌ Not validating URLs before navigation
+- ❌ Allowing any file types in uploads
+- ❌ Not implementing CSRF protection
+- ❌ Using `eval()` or `Function()` with user input
+- ❌ Not checking security headers
+- ❌ Committing secrets to version control
+- ❌ Not rotating credentials regularly
+
+## Security Checklist
+
+- [ ] All secrets in environment variables
+- [ ] HTTPS enforced in production
+- [ ] CSP headers configured
+- [ ] Input validation on all forms
+- [ ] HTML sanitization where needed
+- [ ] Authentication tokens in httpOnly cookies
+- [ ] CORS properly configured
+- [ ] File upload restrictions in place
+- [ ] Rate limiting implemented
+- [ ] Dependencies scanned for vulnerabilities
+- [ ] Error messages don't expose sensitive info
+- [ ] Audit logs for security events
+
+**See also:** `input-sanitization.mdc`, `../../patterns/security.mdc`, `validation.mdc`, `forms.mdc`

@@ -1,0 +1,700 @@
+---
+description: "TanStack Query patterns - cache management, optimistic updates, prefetching, mutations"
+globs: ["**/hooks/use*.ts", "**/api/**/*.ts", "**/*.tsx"]
+---
+
+# Data Fetching with TanStack Query
+
+## Setup
+
+```typescript
+// main.tsx
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 60 * 1000, // 1 minute
+      gcTime: 5 * 60 * 1000, // 5 minutes (formerly cacheTime)
+      retry: 3,
+      retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
+      refetchOnWindowFocus: false,
+    },
+    mutations: {
+      retry: 1,
+    },
+  },
+});
+
+function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+      <ReactQueryDevtools initialIsOpen={false} />
+    </QueryClientProvider>
+  );
+}
+```
+
+## Basic Queries
+
+### Simple Query
+```typescript
+import { useQuery } from '@tanstack/react-query';
+
+interface User {
+  id: string;
+  name: string;
+  email: string;
+}
+
+function UserProfile({ userId }: { userId: string }) {
+  const { 
+    data: user, 
+    isLoading, 
+    error,
+    isError,
+    isFetching,
+    refetch
+  } = useQuery({
+    queryKey: ['user', userId],
+    queryFn: async () => {
+      const response = await fetch(`/api/users/${userId}`);
+      if (!response.ok) throw new Error('Failed to fetch user');
+      return response.json() as Promise<User>;
+    },
+  });
+
+  if (isLoading) return <Spinner />;
+  if (isError) return <ErrorMessage error={error} />;
+  if (!user) return null;
+
+  return (
+    <div>
+      <h2>{user.name}</h2>
+      <p>{user.email}</p>
+      <button onClick={() => refetch()}>Refresh</button>
+      {isFetching && <span>Updating...</span>}
+    </div>
+  );
+}
+```
+
+### Query with Parameters
+```typescript
+interface SearchParams {
+  query: string;
+  page: number;
+  limit: number;
+}
+
+function useSearchUsers(params: SearchParams) {
+  return useQuery({
+    queryKey: ['users', 'search', params],
+    queryFn: async () => {
+      const searchParams = new URLSearchParams({
+        q: params.query,
+        page: String(params.page),
+        limit: String(params.limit),
+      });
+      
+      const response = await fetch(`/api/users/search?${searchParams}`);
+      if (!response.ok) throw new Error('Search failed');
+      return response.json();
+    },
+    enabled: params.query.length > 0, // Only run when query exists
+  });
+}
+
+function UserSearch() {
+  const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
+
+  const { data, isLoading } = useSearchUsers({ query, page, limit: 10 });
+
+  return (
+    <div>
+      <input 
+        value={query} 
+        onChange={(e) => setQuery(e.target.value)} 
+      />
+      {isLoading && <Spinner />}
+      {data && <UserList users={data.users} />}
+    </div>
+  );
+}
+```
+
+## Query Keys Best Practices
+
+```typescript
+// GOOD - Hierarchical query keys
+export const queryKeys = {
+  users: {
+    all: ['users'] as const,
+    lists: () => [...queryKeys.users.all, 'list'] as const,
+    list: (filters: string) => [...queryKeys.users.lists(), filters] as const,
+    details: () => [...queryKeys.users.all, 'detail'] as const,
+    detail: (id: string) => [...queryKeys.users.details(), id] as const,
+  },
+  posts: {
+    all: ['posts'] as const,
+    lists: () => [...queryKeys.posts.all, 'list'] as const,
+    list: (filters: PostFilters) => [...queryKeys.posts.lists(), filters] as const,
+    details: () => [...queryKeys.posts.all, 'detail'] as const,
+    detail: (id: string) => [...queryKeys.posts.details(), id] as const,
+  },
+} as const;
+
+// Usage
+function useUser(userId: string) {
+  return useQuery({
+    queryKey: queryKeys.users.detail(userId),
+    queryFn: () => fetchUser(userId),
+  });
+}
+
+function useUsers(filters: string) {
+  return useQuery({
+    queryKey: queryKeys.users.list(filters),
+    queryFn: () => fetchUsers(filters),
+  });
+}
+
+// Invalidate all user queries
+queryClient.invalidateQueries({ queryKey: queryKeys.users.all });
+
+// Invalidate specific user
+queryClient.invalidateQueries({ queryKey: queryKeys.users.detail('123') });
+```
+
+## Mutations
+
+### Basic Mutation
+```typescript
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+
+interface CreateUserDto {
+  name: string;
+  email: string;
+}
+
+function useCreateUser() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (userData: CreateUserDto) => {
+      const response = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(userData),
+      });
+      
+      if (!response.ok) throw new Error('Failed to create user');
+      return response.json();
+    },
+    onSuccess: (newUser) => {
+      // Invalidate and refetch users list
+      queryClient.invalidateQueries({ queryKey: queryKeys.users.lists() });
+      
+      // Or update cache directly
+      queryClient.setQueryData(
+        queryKeys.users.detail(newUser.id),
+        newUser
+      );
+    },
+    onError: (error) => {
+      console.error('Failed to create user:', error);
+    },
+  });
+}
+
+function CreateUserForm() {
+  const createUser = useCreateUser();
+
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    
+    await createUser.mutateAsync({
+      name: formData.get('name') as string,
+      email: formData.get('email') as string,
+    });
+
+    e.currentTarget.reset();
+  }
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <input name="name" required />
+      <input name="email" type="email" required />
+      
+      {createUser.error && (
+        <div className="error">{createUser.error.message}</div>
+      )}
+      
+      <button 
+        type="submit" 
+        disabled={createUser.isPending}
+      >
+        {createUser.isPending ? 'Creating...' : 'Create User'}
+      </button>
+    </form>
+  );
+}
+```
+
+### Update Mutation
+```typescript
+interface UpdateUserDto {
+  id: string;
+  name?: string;
+  email?: string;
+}
+
+function useUpdateUser() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (userData: UpdateUserDto) => {
+      const response = await fetch(`/api/users/${userData.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(userData),
+      });
+      
+      if (!response.ok) throw new Error('Failed to update user');
+      return response.json();
+    },
+    onMutate: async (updatedUser) => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ 
+        queryKey: queryKeys.users.detail(updatedUser.id) 
+      });
+
+      // Snapshot previous value
+      const previousUser = queryClient.getQueryData(
+        queryKeys.users.detail(updatedUser.id)
+      );
+
+      // Optimistically update cache
+      queryClient.setQueryData(
+        queryKeys.users.detail(updatedUser.id),
+        (old: User) => ({ ...old, ...updatedUser })
+      );
+
+      return { previousUser };
+    },
+    onError: (err, updatedUser, context) => {
+      // Rollback on error
+      if (context?.previousUser) {
+        queryClient.setQueryData(
+          queryKeys.users.detail(updatedUser.id),
+          context.previousUser
+        );
+      }
+    },
+    onSettled: (data, error, variables) => {
+      // Refetch after error or success
+      queryClient.invalidateQueries({ 
+        queryKey: queryKeys.users.detail(variables.id) 
+      });
+    },
+  });
+}
+```
+
+### Delete Mutation
+```typescript
+function useDeleteUser() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (userId: string) => {
+      const response = await fetch(`/api/users/${userId}`, {
+        method: 'DELETE',
+      });
+      
+      if (!response.ok) throw new Error('Failed to delete user');
+    },
+    onSuccess: (_, deletedUserId) => {
+      // Remove from cache
+      queryClient.removeQueries({ 
+        queryKey: queryKeys.users.detail(deletedUserId) 
+      });
+      
+      // Invalidate lists
+      queryClient.invalidateQueries({ 
+        queryKey: queryKeys.users.lists() 
+      });
+    },
+  });
+}
+```
+
+## Optimistic Updates
+
+```typescript
+function useTodoToggle() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (todoId: string) => {
+      const response = await fetch(`/api/todos/${todoId}/toggle`, {
+        method: 'PATCH',
+      });
+      return response.json();
+    },
+    onMutate: async (todoId) => {
+      // Cancel ongoing queries
+      await queryClient.cancelQueries({ queryKey: ['todos'] });
+
+      // Snapshot
+      const previousTodos = queryClient.getQueryData<Todo[]>(['todos']);
+
+      // Optimistic update
+      queryClient.setQueryData<Todo[]>(['todos'], (old) =>
+        old?.map((todo) =>
+          todo.id === todoId
+            ? { ...todo, completed: !todo.completed }
+            : todo
+        )
+      );
+
+      return { previousTodos };
+    },
+    onError: (err, todoId, context) => {
+      // Rollback
+      queryClient.setQueryData(['todos'], context?.previousTodos);
+    },
+    onSettled: () => {
+      // Refetch to ensure sync
+      queryClient.invalidateQueries({ queryKey: ['todos'] });
+    },
+  });
+}
+```
+
+## Infinite Queries
+
+```typescript
+interface PagedResponse<T> {
+  items: T[];
+  nextCursor?: string;
+  hasMore: boolean;
+}
+
+function useInfiniteUsers() {
+  return useInfiniteQuery({
+    queryKey: ['users', 'infinite'],
+    queryFn: async ({ pageParam }) => {
+      const response = await fetch(
+        `/api/users?cursor=${pageParam || ''}`
+      );
+      return response.json() as Promise<PagedResponse<User>>;
+    },
+    getNextPageParam: (lastPage) => 
+      lastPage.hasMore ? lastPage.nextCursor : undefined,
+    initialPageParam: null,
+  });
+}
+
+function InfiniteUserList() {
+  const {
+    data,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isLoading,
+  } = useInfiniteUsers();
+
+  if (isLoading) return <Spinner />;
+
+  return (
+    <div>
+      {data?.pages.map((page, i) => (
+        <React.Fragment key={i}>
+          {page.items.map((user) => (
+            <UserCard key={user.id} user={user} />
+          ))}
+        </React.Fragment>
+      ))}
+
+      {hasNextPage && (
+        <button
+          onClick={() => fetchNextPage()}
+          disabled={isFetchingNextPage}
+        >
+          {isFetchingNextPage ? 'Loading...' : 'Load More'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// With Intersection Observer
+function InfiniteUserListAuto() {
+  const { data, fetchNextPage, hasNextPage } = useInfiniteUsers();
+  const observerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!observerRef.current || !hasNextPage) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          fetchNextPage();
+        }
+      },
+      { threshold: 0.5 }
+    );
+
+    observer.observe(observerRef.current);
+    return () => observer.disconnect();
+  }, [fetchNextPage, hasNextPage]);
+
+  return (
+    <div>
+      {data?.pages.map((page, i) => (
+        <React.Fragment key={i}>
+          {page.items.map((user) => (
+            <UserCard key={user.id} user={user} />
+          ))}
+        </React.Fragment>
+      ))}
+      <div ref={observerRef} />
+    </div>
+  );
+}
+```
+
+## Prefetching
+
+```typescript
+function UsersList() {
+  const queryClient = useQueryClient();
+  const { data: users } = useQuery({
+    queryKey: queryKeys.users.lists(),
+    queryFn: fetchUsers,
+  });
+
+  const handleMouseEnter = (userId: string) => {
+    // Prefetch user details
+    queryClient.prefetchQuery({
+      queryKey: queryKeys.users.detail(userId),
+      queryFn: () => fetchUser(userId),
+      staleTime: 60 * 1000, // Consider data fresh for 1 minute
+    });
+  };
+
+  return (
+    <ul>
+      {users?.map((user) => (
+        <li
+          key={user.id}
+          onMouseEnter={() => handleMouseEnter(user.id)}
+        >
+          <Link to={`/users/${user.id}`}>{user.name}</Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+## Dependent Queries
+
+```typescript
+function UserWithPosts({ userId }: { userId: string }) {
+  // First query
+  const { data: user } = useQuery({
+    queryKey: queryKeys.users.detail(userId),
+    queryFn: () => fetchUser(userId),
+  });
+
+  // Second query depends on first
+  const { data: posts } = useQuery({
+    queryKey: ['posts', 'user', userId],
+    queryFn: () => fetchUserPosts(userId),
+    enabled: !!user, // Only run when user exists
+  });
+
+  return (
+    <div>
+      <h2>{user?.name}</h2>
+      {posts?.map((post) => (
+        <PostCard key={post.id} post={post} />
+      ))}
+    </div>
+  );
+}
+```
+
+## Parallel Queries
+
+```typescript
+function Dashboard() {
+  // Using multiple useQuery hooks
+  const userQuery = useQuery({
+    queryKey: ['user', 'me'],
+    queryFn: fetchCurrentUser,
+  });
+
+  const statsQuery = useQuery({
+    queryKey: ['stats'],
+    queryFn: fetchStats,
+  });
+
+  const notificationsQuery = useQuery({
+    queryKey: ['notifications'],
+    queryFn: fetchNotifications,
+  });
+
+  if (userQuery.isLoading || statsQuery.isLoading || notificationsQuery.isLoading) {
+    return <LoadingSkeleton />;
+  }
+
+  return (
+    <div>
+      <UserProfile user={userQuery.data} />
+      <Stats data={statsQuery.data} />
+      <Notifications items={notificationsQuery.data} />
+    </div>
+  );
+}
+
+// Using useQueries for dynamic parallel queries
+function MultiUserDisplay({ userIds }: { userIds: string[] }) {
+  const userQueries = useQueries({
+    queries: userIds.map((id) => ({
+      queryKey: queryKeys.users.detail(id),
+      queryFn: () => fetchUser(id),
+    })),
+  });
+
+  const isLoading = userQueries.some((q) => q.isLoading);
+  const users = userQueries.map((q) => q.data).filter(Boolean);
+
+  if (isLoading) return <Spinner />;
+
+  return (
+    <div>
+      {users.map((user) => (
+        <UserCard key={user.id} user={user} />
+      ))}
+    </div>
+  );
+}
+```
+
+## Error Handling
+
+```typescript
+// Global error handler
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      throwOnError: false,
+      retry: (failureCount, error) => {
+        // Don't retry on 404
+        if (error instanceof Error && error.message.includes('404')) {
+          return false;
+        }
+        return failureCount < 3;
+      },
+    },
+  },
+  queryCache: new QueryCache({
+    onError: (error, query) => {
+      // Global error notification
+      toast.error(`Error: ${error.message}`);
+      console.error('Query error:', query.queryKey, error);
+    },
+  }),
+  mutationCache: new MutationCache({
+    onError: (error) => {
+      toast.error(`Mutation failed: ${error.message}`);
+    },
+  }),
+});
+
+// Per-query error handling
+function UserProfile({ userId }: { userId: string }) {
+  const { data, error, isError } = useQuery({
+    queryKey: queryKeys.users.detail(userId),
+    queryFn: () => fetchUser(userId),
+    retry: 2,
+    retryDelay: 1000,
+  });
+
+  if (isError) {
+    return <ErrorMessage error={error} retry={() => refetch()} />;
+  }
+
+  return <div>{data?.name}</div>;
+}
+```
+
+## Background Updates
+
+```typescript
+function RealtimeUserList() {
+  const queryClient = useQueryClient();
+
+  // Poll for updates
+  const { data } = useQuery({
+    queryKey: ['users'],
+    queryFn: fetchUsers,
+    refetchInterval: 30000, // Poll every 30 seconds
+    refetchIntervalInBackground: true,
+  });
+
+  // Or use WebSocket for real-time updates
+  useEffect(() => {
+    const ws = new WebSocket('wss://api.example.com/ws');
+
+    ws.onmessage = (event) => {
+      const update = JSON.parse(event.data);
+      
+      if (update.type === 'user_updated') {
+        queryClient.invalidateQueries({ 
+          queryKey: queryKeys.users.detail(update.userId) 
+        });
+      }
+    };
+
+    return () => ws.close();
+  }, [queryClient]);
+
+  return <UserList users={data} />;
+}
+```
+
+## Best Practices
+
+- ✅ Use structured query keys (hierarchical)
+- ✅ Leverage staleTime to reduce unnecessary refetches
+- ✅ Implement optimistic updates for better UX
+- ✅ Prefetch data on hover/route change
+- ✅ Use enabled flag for dependent queries
+- ✅ Handle loading and error states properly
+- ✅ Invalidate queries after mutations
+- ✅ Use React Query DevTools in development
+- ✅ Configure appropriate retry logic
+- ✅ Normalize cache updates for consistency
+
+## Anti-Patterns
+
+- ❌ Using useEffect to fetch data (use useQuery instead)
+- ❌ Not structuring query keys properly
+- ❌ Invalidating too broadly (affects performance)
+- ❌ Not handling loading/error states
+- ❌ Fetching same data multiple times
+- ❌ Not using optimistic updates where appropriate
+- ❌ Setting staleTime too low (unnecessary refetches)
+- ❌ Not canceling queries in onMutate
+- ❌ Mixing TanStack Query with other state management for server data
+- ❌ Not using query key factory functions
+
+**See also:** `routing.mdc`, `state-management.mdc`, `error-handling.mdc`, `performance.mdc`

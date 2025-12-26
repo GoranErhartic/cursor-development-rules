@@ -1,0 +1,770 @@
+---
+description: "React Router v7 patterns - loaders, actions, nested routes, route guards"
+globs: ["**/routes/**/*.tsx", "**/router.tsx", "**/App.tsx"]
+---
+
+# Routing with React Router v7
+
+## Basic Setup
+
+```typescript
+// main.tsx
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import { RouterProvider } from 'react-router';
+import { router } from './router';
+
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <RouterProvider router={router} />
+  </StrictMode>
+);
+```
+
+```typescript
+// router.tsx
+import { createBrowserRouter } from 'react-router';
+import { RootLayout } from './layouts/RootLayout';
+import { HomePage } from './pages/HomePage';
+import { UserDetailPage, userLoader } from './pages/UserDetailPage';
+import { ErrorPage } from './pages/ErrorPage';
+
+export const router = createBrowserRouter([
+  {
+    path: '/',
+    element: <RootLayout />,
+    errorElement: <ErrorPage />,
+    children: [
+      {
+        index: true,
+        element: <HomePage />,
+      },
+      {
+        path: 'users/:userId',
+        element: <UserDetailPage />,
+        loader: userLoader,
+      },
+    ],
+  },
+]);
+```
+
+## Route Definitions
+
+### Type-Safe Routes
+```typescript
+// routes/types.ts
+export interface UserParams {
+  userId: string;
+}
+
+export interface SearchParams {
+  q?: string;
+  page?: string;
+  sort?: 'asc' | 'desc';
+}
+
+// Loader data types
+export interface UserLoaderData {
+  user: User;
+  permissions: string[];
+}
+```
+
+### Nested Routes
+```typescript
+export const router = createBrowserRouter([
+  {
+    path: '/',
+    element: <RootLayout />,
+    children: [
+      {
+        index: true,
+        element: <HomePage />,
+      },
+      {
+        path: 'dashboard',
+        element: <DashboardLayout />,
+        children: [
+          {
+            index: true,
+            element: <DashboardOverview />,
+          },
+          {
+            path: 'analytics',
+            element: <AnalyticsPage />,
+          },
+          {
+            path: 'settings',
+            element: <SettingsPage />,
+          },
+        ],
+      },
+    ],
+  },
+]);
+```
+
+## Loaders - Data Fetching
+
+### Basic Loader
+```typescript
+// pages/UserDetailPage.tsx
+import { useLoaderData, LoaderFunctionArgs } from 'react-router';
+import type { UserLoaderData } from './types';
+
+export async function userLoader({ 
+  params 
+}: LoaderFunctionArgs): Promise<UserLoaderData> {
+  const { userId } = params;
+  
+  if (!userId) {
+    throw new Response('User ID is required', { status: 400 });
+  }
+
+  const [user, permissions] = await Promise.all([
+    fetchUser(userId),
+    fetchUserPermissions(userId),
+  ]);
+
+  if (!user) {
+    throw new Response('User not found', { status: 404 });
+  }
+
+  return { user, permissions };
+}
+
+export function UserDetailPage() {
+  const { user, permissions } = useLoaderData<UserLoaderData>();
+
+  return (
+    <div>
+      <h1>{user.name}</h1>
+      <p>{user.email}</p>
+      {permissions.includes('edit') && (
+        <button>Edit Profile</button>
+      )}
+    </div>
+  );
+}
+```
+
+### Loader with Search Params
+```typescript
+export async function searchLoader({ 
+  request 
+}: LoaderFunctionArgs): Promise<SearchResult> {
+  const url = new URL(request.url);
+  const query = url.searchParams.get('q') || '';
+  const page = Number(url.searchParams.get('page')) || 1;
+  const sort = url.searchParams.get('sort') || 'asc';
+
+  const results = await searchUsers({
+    query,
+    page,
+    sort: sort as 'asc' | 'desc',
+  });
+
+  return results;
+}
+
+export function SearchPage() {
+  const results = useLoaderData<SearchResult>();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const handleSearch = (query: string) => {
+    setSearchParams({ q: query, page: '1' });
+  };
+
+  return (
+    <div>
+      <SearchInput onSearch={handleSearch} />
+      <ResultsList results={results.items} />
+      <Pagination
+        current={results.page}
+        total={results.totalPages}
+        onChange={(page) => setSearchParams({ page: String(page) })}
+      />
+    </div>
+  );
+}
+```
+
+### Loader with Authentication
+```typescript
+async function protectedLoader({ request }: LoaderFunctionArgs) {
+  const token = getAuthToken();
+  
+  if (!token) {
+    throw redirect('/login?redirectTo=' + new URL(request.url).pathname);
+  }
+
+  try {
+    const data = await fetchProtectedData(token);
+    return data;
+  } catch (error) {
+    if (error instanceof UnauthorizedError) {
+      throw redirect('/login');
+    }
+    throw error;
+  }
+}
+```
+
+## Actions - Data Mutations
+
+### Form Action
+```typescript
+// pages/CreateUserPage.tsx
+import { Form, redirect, ActionFunctionArgs } from 'react-router';
+
+export async function createUserAction({ 
+  request 
+}: ActionFunctionArgs) {
+  const formData = await request.formData();
+  
+  const userData = {
+    name: formData.get('name') as string,
+    email: formData.get('email') as string,
+  };
+
+  // Validate
+  const errors = validateUser(userData);
+  if (Object.keys(errors).length > 0) {
+    return { errors };
+  }
+
+  // Create user
+  try {
+    const user = await createUser(userData);
+    return redirect(`/users/${user.id}`);
+  } catch (error) {
+    return { 
+      errors: { 
+        _form: 'Failed to create user. Please try again.' 
+      } 
+    };
+  }
+}
+
+export function CreateUserPage() {
+  const actionData = useActionData<typeof createUserAction>();
+  const navigation = useNavigation();
+  const isSubmitting = navigation.state === 'submitting';
+
+  return (
+    <Form method="post">
+      <div>
+        <label htmlFor="name">Name</label>
+        <input
+          id="name"
+          name="name"
+          type="text"
+          required
+        />
+        {actionData?.errors?.name && (
+          <span className="error">{actionData.errors.name}</span>
+        )}
+      </div>
+
+      <div>
+        <label htmlFor="email">Email</label>
+        <input
+          id="email"
+          name="email"
+          type="email"
+          required
+        />
+        {actionData?.errors?.email && (
+          <span className="error">{actionData.errors.email}</span>
+        )}
+      </div>
+
+      {actionData?.errors?._form && (
+        <div className="error">{actionData.errors._form}</div>
+      )}
+
+      <button type="submit" disabled={isSubmitting}>
+        {isSubmitting ? 'Creating...' : 'Create User'}
+      </button>
+    </Form>
+  );
+}
+```
+
+### Delete Action
+```typescript
+export async function deleteUserAction({ 
+  params 
+}: ActionFunctionArgs) {
+  const { userId } = params;
+  
+  if (!userId) {
+    throw new Response('User ID is required', { status: 400 });
+  }
+
+  await deleteUser(userId);
+  
+  return redirect('/users');
+}
+
+// Usage in component
+function UserCard({ user }: { user: User }) {
+  const fetcher = useFetcher();
+  const isDeleting = fetcher.state === 'submitting';
+
+  return (
+    <div>
+      <h3>{user.name}</h3>
+      <fetcher.Form method="delete" action={`/users/${user.id}/delete`}>
+        <button type="submit" disabled={isDeleting}>
+          {isDeleting ? 'Deleting...' : 'Delete'}
+        </button>
+      </fetcher.Form>
+    </div>
+  );
+}
+```
+
+## Navigation
+
+### Declarative Navigation
+```typescript
+import { Link, NavLink } from 'react-router';
+
+function Navigation() {
+  return (
+    <nav>
+      {/* Basic link */}
+      <Link to="/">Home</Link>
+      
+      {/* NavLink with active styling */}
+      <NavLink
+        to="/dashboard"
+        className={({ isActive }) => 
+          isActive ? 'nav-link active' : 'nav-link'
+        }
+      >
+        Dashboard
+      </NavLink>
+      
+      {/* Link with state */}
+      <Link to="/users" state={{ from: 'navigation' }}>
+        Users
+      </Link>
+      
+      {/* Relative link */}
+      <Link to="../settings" relative="path">
+        Settings
+      </Link>
+      
+      {/* Replace current entry */}
+      <Link to="/login" replace>
+        Login
+      </Link>
+    </nav>
+  );
+}
+```
+
+### Programmatic Navigation
+```typescript
+import { useNavigate, useLocation } from 'react-router';
+
+function LoginForm() {
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  async function handleSubmit(formData: FormData) {
+    const user = await login(formData);
+    
+    if (user) {
+      // Redirect to previous page or dashboard
+      const from = (location.state?.from as string) || '/dashboard';
+      navigate(from, { replace: true });
+    }
+  }
+
+  return (
+    <form action={handleSubmit}>
+      {/* form fields */}
+    </form>
+  );
+}
+
+// Navigate back
+function BackButton() {
+  const navigate = useNavigate();
+  return <button onClick={() => navigate(-1)}>Back</button>;
+}
+
+// Navigate with state
+function UserList() {
+  const navigate = useNavigate();
+  
+  const handleUserClick = (userId: string) => {
+    navigate(`/users/${userId}`, {
+      state: { from: '/users' },
+    });
+  };
+  
+  // ...
+}
+```
+
+## Route Guards / Protected Routes
+
+### Auth Guard Component
+```typescript
+// components/RequireAuth.tsx
+import { Navigate, useLocation } from 'react-router';
+import { useAuth } from '@/hooks/useAuth';
+
+interface RequireAuthProps {
+  children: React.ReactNode;
+  requiredPermissions?: string[];
+}
+
+export function RequireAuth({ 
+  children, 
+  requiredPermissions = [] 
+}: RequireAuthProps) {
+  const { user, isLoading } = useAuth();
+  const location = useLocation();
+
+  if (isLoading) {
+    return <LoadingSpinner />;
+  }
+
+  if (!user) {
+    return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+
+  if (requiredPermissions.length > 0) {
+    const hasPermission = requiredPermissions.every(permission =>
+      user.permissions.includes(permission)
+    );
+
+    if (!hasPermission) {
+      return <Navigate to="/unauthorized" replace />;
+    }
+  }
+
+  return <>{children}</>;
+}
+
+// Usage in routes
+export const router = createBrowserRouter([
+  {
+    path: '/dashboard',
+    element: (
+      <RequireAuth>
+        <DashboardLayout />
+      </RequireAuth>
+    ),
+    children: [
+      {
+        path: 'admin',
+        element: (
+          <RequireAuth requiredPermissions={['admin']}>
+            <AdminPage />
+          </RequireAuth>
+        ),
+      },
+    ],
+  },
+]);
+```
+
+### Loader-Based Guard
+```typescript
+async function protectedLoader({ request }: LoaderFunctionArgs) {
+  const user = await getCurrentUser();
+  
+  if (!user) {
+    const url = new URL(request.url);
+    throw redirect(`/login?redirectTo=${url.pathname}`);
+  }
+  
+  return { user };
+}
+
+async function adminLoader({ request }: LoaderFunctionArgs) {
+  const user = await getCurrentUser();
+  
+  if (!user) {
+    throw redirect('/login');
+  }
+  
+  if (!user.isAdmin) {
+    throw new Response('Forbidden', { status: 403 });
+  }
+  
+  return { user };
+}
+```
+
+## Error Handling
+
+### Error Boundaries
+```typescript
+// components/ErrorPage.tsx
+import { useRouteError, isRouteErrorResponse } from 'react-router';
+
+export function ErrorPage() {
+  const error = useRouteError();
+
+  if (isRouteErrorResponse(error)) {
+    return (
+      <div>
+        <h1>{error.status} {error.statusText}</h1>
+        <p>{error.data}</p>
+      </div>
+    );
+  }
+
+  if (error instanceof Error) {
+    return (
+      <div>
+        <h1>Oops! An error occurred</h1>
+        <p>{error.message}</p>
+      </div>
+    );
+  }
+
+  return <div>Unknown error occurred</div>;
+}
+
+// Per-route error boundary
+export const router = createBrowserRouter([
+  {
+    path: '/',
+    element: <RootLayout />,
+    errorElement: <ErrorPage />,
+    children: [
+      {
+        path: 'users',
+        element: <UsersPage />,
+        errorElement: <UsersErrorPage />, // Specific error page
+      },
+    ],
+  },
+]);
+```
+
+## Advanced Patterns
+
+### Lazy Loading Routes
+```typescript
+import { lazy, Suspense } from 'react';
+import { createBrowserRouter } from 'react-router';
+
+const DashboardPage = lazy(() => import('./pages/DashboardPage'));
+const UsersPage = lazy(() => import('./pages/UsersPage'));
+
+export const router = createBrowserRouter([
+  {
+    path: '/',
+    element: <RootLayout />,
+    children: [
+      {
+        path: 'dashboard',
+        element: (
+          <Suspense fallback={<LoadingSpinner />}>
+            <DashboardPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'users',
+        element: (
+          <Suspense fallback={<LoadingSpinner />}>
+            <UsersPage />
+          </Suspense>
+        ),
+      },
+    ],
+  },
+]);
+```
+
+### Prefetching Data
+```typescript
+import { Link, useNavigate } from 'react-router';
+
+function UsersList({ users }: { users: User[] }) {
+  const navigate = useNavigate();
+
+  const handleMouseEnter = (userId: string) => {
+    // Prefetch user data
+    router.navigate(`/users/${userId}`, { 
+      state: { prefetch: true } 
+    });
+  };
+
+  return (
+    <ul>
+      {users.map(user => (
+        <li key={user.id}>
+          <Link
+            to={`/users/${user.id}`}
+            onMouseEnter={() => handleMouseEnter(user.id)}
+          >
+            {user.name}
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+### Outlet Context
+```typescript
+// Layout component
+interface DashboardOutletContext {
+  refreshData: () => void;
+  currentTab: string;
+}
+
+function DashboardLayout() {
+  const [currentTab, setCurrentTab] = useState('overview');
+  
+  const refreshData = useCallback(() => {
+    // Refresh logic
+  }, []);
+
+  const contextValue: DashboardOutletContext = {
+    refreshData,
+    currentTab,
+  };
+
+  return (
+    <div>
+      <DashboardHeader />
+      <Outlet context={contextValue} />
+    </div>
+  );
+}
+
+// Child route
+function DashboardOverview() {
+  const { refreshData, currentTab } = useOutletContext<DashboardOutletContext>();
+
+  return (
+    <div>
+      <h2>Overview (Tab: {currentTab})</h2>
+      <button onClick={refreshData}>Refresh</button>
+    </div>
+  );
+}
+```
+
+## useFetcher for Background Operations
+
+```typescript
+function TodoItem({ todo }: { todo: Todo }) {
+  const fetcher = useFetcher();
+  
+  const isUpdating = 
+    fetcher.state === 'submitting' || 
+    fetcher.state === 'loading';
+
+  const optimisticCompleted = 
+    fetcher.formData?.get('completed') === 'true' 
+      ? true 
+      : todo.completed;
+
+  return (
+    <fetcher.Form method="post" action={`/todos/${todo.id}/toggle`}>
+      <input
+        type="checkbox"
+        name="completed"
+        value="true"
+        checked={optimisticCompleted}
+        onChange={(e) => fetcher.submit(e.currentTarget.form)}
+        disabled={isUpdating}
+      />
+      <span style={{ opacity: isUpdating ? 0.5 : 1 }}>
+        {todo.title}
+      </span>
+    </fetcher.Form>
+  );
+}
+```
+
+## Search Params Management
+
+```typescript
+function ProductFilters() {
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const category = searchParams.get('category') || 'all';
+  const minPrice = Number(searchParams.get('minPrice')) || 0;
+  const maxPrice = Number(searchParams.get('maxPrice')) || 1000;
+
+  const handleFilterChange = (filters: Partial<FilterState>) => {
+    setSearchParams(prev => {
+      const newParams = new URLSearchParams(prev);
+      
+      Object.entries(filters).forEach(([key, value]) => {
+        if (value) {
+          newParams.set(key, String(value));
+        } else {
+          newParams.delete(key);
+        }
+      });
+      
+      return newParams;
+    });
+  };
+
+  return (
+    <div>
+      <select
+        value={category}
+        onChange={(e) => handleFilterChange({ category: e.target.value })}
+      >
+        <option value="all">All Categories</option>
+        <option value="electronics">Electronics</option>
+        <option value="clothing">Clothing</option>
+      </select>
+
+      <input
+        type="range"
+        min={0}
+        max={1000}
+        value={maxPrice}
+        onChange={(e) => handleFilterChange({ maxPrice: Number(e.target.value) })}
+      />
+    </div>
+  );
+}
+```
+
+## Best Practices
+
+- ✅ Use loaders for data fetching, not useEffect
+- ✅ Throw responses from loaders for error handling
+- ✅ Use actions for mutations, not manual fetch calls
+- ✅ Implement loading states with `useNavigation`
+- ✅ Use `useFetcher` for background operations
+- ✅ Validate params and search params in loaders
+- ✅ Use type-safe route definitions
+- ✅ Implement proper error boundaries per route
+- ✅ Lazy load heavy route components
+- ✅ Store UI state in URL when shareable (filters, pagination)
+
+## Anti-Patterns
+
+- ❌ Fetching data in useEffect instead of loaders
+- ❌ Not handling loader/action errors
+- ❌ Storing route state in Zustand instead of URL
+- ❌ Not using Form component for mutations
+- ❌ Mixing client-side and server-side routing patterns
+- ❌ Not implementing loading states
+- ❌ Hardcoding routes strings everywhere (use constants)
+- ❌ Not validating route params
+- ❌ Forgetting to handle navigation states
+
+**See also:** `data-fetching.mdc`, `forms.mdc`, `error-handling.mdc`, `state-management.mdc`
