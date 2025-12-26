@@ -22,7 +22,7 @@ registry=https://registry.npmjs.org/
 save-exact=true
 
 # Node version enforcement
-node-version-range=">=20.0.0"
+node-version-range=">=22.0.0"
 ```
 
 ### package.json (Root)
@@ -30,10 +30,10 @@ node-version-range=">=20.0.0"
 {
   "name": "my-app",
   "private": true,
-  "packageManager": "pnpm@9.15.0",
+  "packageManager": "pnpm@9.15.4",
   "engines": {
-    "node": ">=20.0.0",
-    "pnpm": ">=9.0.0"
+    "node": ">=22.0.0",
+    "pnpm": ">=9.15.0"
   },
   "scripts": {
     "dev": "vite",
@@ -193,9 +193,9 @@ Before adding any dependency:
 ```json
 {
   "devDependencies": {
-    "typescript": "^5.6.0",
-    "vite": "^6.0.0",
-    "@vitejs/plugin-react": "^4.3.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.1.0",
+    "@vitejs/plugin-react": "^4.4.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0"
   }
@@ -427,7 +427,7 @@ jobs:
           version: 9
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --audit-level high
