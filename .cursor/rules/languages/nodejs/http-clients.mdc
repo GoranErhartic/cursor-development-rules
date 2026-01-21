@@ -1,0 +1,577 @@
+---
+description: "HTTP clients - native fetch, axios, undici, type-safe requests, error handling"
+globs: ["**/*Client*.ts", "**/*client*.ts", "**/api/**/*.ts", "**/*Api*.ts"]
+---
+
+# HTTP Clients
+
+## Native Fetch (Recommended)
+
+Node.js 18+ includes native `fetch`. Use it for most HTTP requests.
+
+### Basic Usage
+
+```typescript
+// src/shared/http/fetch-client.ts
+
+interface FetchOptions extends RequestInit {
+  timeout?: number;
+  baseUrl?: string;
+}
+
+export async function fetchJson<T>(
+  url: string,
+  options: FetchOptions = {}
+): Promise<T> {
+  const { timeout = 10000, baseUrl, ...fetchOptions } = options;
+  const fullUrl = baseUrl ? `${baseUrl}${url}` : url;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await fetch(fullUrl, {
+      ...fetchOptions,
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        ...fetchOptions.headers,
+      },
+    });
+
+    if (!response.ok) {
+      throw new HttpError(response.status, response.statusText, await response.text());
+    }
+
+    return response.json() as Promise<T>;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+export class HttpError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly statusText: string,
+    public readonly body?: string
+  ) {
+    super(`HTTP ${status}: ${statusText}`);
+    this.name = "HttpError";
+  }
+}
+```
+
+### Typed API Client
+
+```typescript
+// src/modules/users/user-api.client.ts
+
+import { fetchJson, HttpError } from "@/shared/http/fetch-client";
+import type { User, CreateUserRequest } from "./user.types";
+
+export class UserApiClient {
+  constructor(private readonly baseUrl: string) {}
+
+  async getUser(id: string): Promise<User> {
+    return fetchJson<User>(`/users/${id}`, {
+      baseUrl: this.baseUrl,
+    });
+  }
+
+  async getUsers(params?: { page?: number; limit?: number }): Promise<User[]> {
+    const searchParams = new URLSearchParams();
+    if (params?.page) searchParams.set("page", params.page.toString());
+    if (params?.limit) searchParams.set("limit", params.limit.toString());
+
+    const query = searchParams.toString();
+    const url = query ? `/users?${query}` : "/users";
+
+    return fetchJson<User[]>(url, { baseUrl: this.baseUrl });
+  }
+
+  async createUser(data: CreateUserRequest): Promise<User> {
+    return fetchJson<User>("/users", {
+      baseUrl: this.baseUrl,
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateUser(id: string, data: Partial<User>): Promise<User> {
+    return fetchJson<User>(`/users/${id}`, {
+      baseUrl: this.baseUrl,
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteUser(id: string): Promise<void> {
+    await fetchJson(`/users/${id}`, {
+      baseUrl: this.baseUrl,
+      method: "DELETE",
+    });
+  }
+}
+```
+
+### Request Interceptors
+
+```typescript
+// src/shared/http/interceptors.ts
+
+type RequestInterceptor = (request: Request) => Request | Promise<Request>;
+type ResponseInterceptor = (response: Response) => Response | Promise<Response>;
+
+class HttpClient {
+  private requestInterceptors: RequestInterceptor[] = [];
+  private responseInterceptors: ResponseInterceptor[] = [];
+
+  addRequestInterceptor(interceptor: RequestInterceptor): void {
+    this.requestInterceptors.push(interceptor);
+  }
+
+  addResponseInterceptor(interceptor: ResponseInterceptor): void {
+    this.responseInterceptors.push(interceptor);
+  }
+
+  async fetch(input: RequestInfo, init?: RequestInit): Promise<Response> {
+    let request = new Request(input, init);
+
+    // Apply request interceptors
+    for (const interceptor of this.requestInterceptors) {
+      request = await interceptor(request);
+    }
+
+    let response = await fetch(request);
+
+    // Apply response interceptors
+    for (const interceptor of this.responseInterceptors) {
+      response = await interceptor(response);
+    }
+
+    return response;
+  }
+}
+
+// Usage
+const client = new HttpClient();
+
+// Add auth header
+client.addRequestInterceptor(async (request) => {
+  const token = await getAccessToken();
+  request.headers.set("Authorization", `Bearer ${token}`);
+  return request;
+});
+
+// Add correlation ID
+client.addRequestInterceptor((request) => {
+  request.headers.set("X-Correlation-Id", getCorrelationId());
+  return request;
+});
+
+// Log responses
+client.addResponseInterceptor((response) => {
+  logger.info({
+    url: response.url,
+    status: response.status,
+  });
+  return response;
+});
+```
+
+### Error Handling
+
+```typescript
+// src/shared/http/errors.ts
+
+import { HttpError } from "./fetch-client";
+
+export function handleHttpError(error: unknown): never {
+  if (error instanceof HttpError) {
+    switch (error.status) {
+      case 400:
+        throw new ValidationError("Invalid request", parseErrors(error.body));
+      case 401:
+        throw new UnauthorizedError("Authentication required");
+      case 403:
+        throw new ForbiddenError("Access denied");
+      case 404:
+        throw new NotFoundError("Resource not found");
+      case 429:
+        throw new RateLimitError("Too many requests");
+      default:
+        if (error.status >= 500) {
+          throw new ServiceUnavailableError("Service temporarily unavailable");
+        }
+        throw error;
+    }
+  }
+
+  if (error instanceof TypeError && error.message.includes("fetch")) {
+    throw new NetworkError("Network error");
+  }
+
+  if (error instanceof DOMException && error.name === "AbortError") {
+    throw new TimeoutError("Request timed out");
+  }
+
+  throw error;
+}
+
+// Usage in client
+async getUser(id: string): Promise<User> {
+  try {
+    return await fetchJson<User>(`/users/${id}`, {
+      baseUrl: this.baseUrl,
+    });
+  } catch (error) {
+    handleHttpError(error);
+  }
+}
+```
+
+## Undici (High Performance)
+
+Undici is faster than native fetch for high-throughput scenarios.
+
+```typescript
+// src/shared/http/undici-client.ts
+
+import { request, Dispatcher } from "undici";
+
+interface RequestOptions {
+  method?: Dispatcher.HttpMethod;
+  headers?: Record<string, string>;
+  body?: unknown;
+  timeout?: number;
+}
+
+export async function undiciRequest<T>(
+  url: string,
+  options: RequestOptions = {}
+): Promise<T> {
+  const { method = "GET", headers = {}, body, timeout = 10000 } = options;
+
+  const response = await request(url, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      ...headers,
+    },
+    body: body ? JSON.stringify(body) : undefined,
+    headersTimeout: timeout,
+    bodyTimeout: timeout,
+  });
+
+  if (response.statusCode >= 400) {
+    const errorBody = await response.body.text();
+    throw new HttpError(response.statusCode, "", errorBody);
+  }
+
+  return response.body.json() as Promise<T>;
+}
+
+// Connection pooling for high performance
+import { Pool } from "undici";
+
+const pool = new Pool("https://api.example.com", {
+  connections: 100,
+  pipelining: 10,
+});
+
+async function pooledRequest<T>(path: string): Promise<T> {
+  const response = await pool.request({
+    path,
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+
+  return response.body.json() as Promise<T>;
+}
+```
+
+## Axios (Alternative)
+
+Use Axios when you need more features out of the box.
+
+```typescript
+// src/shared/http/axios-client.ts
+
+import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from "axios";
+import { logger } from "@/shared/logger";
+import { getCorrelationId } from "@/shared/middleware/correlation-id";
+
+export function createAxiosClient(baseURL: string): AxiosInstance {
+  const client = axios.create({
+    baseURL,
+    timeout: 10000,
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+
+  // Request interceptor
+  client.interceptors.request.use(
+    (config: InternalAxiosRequestConfig) => {
+      // Add correlation ID
+      config.headers.set("X-Correlation-Id", getCorrelationId());
+
+      // Add auth token
+      const token = getAccessToken();
+      if (token) {
+        config.headers.set("Authorization", `Bearer ${token}`);
+      }
+
+      logger.debug({
+        method: config.method,
+        url: config.url,
+      }, "HTTP request");
+
+      return config;
+    },
+    (error) => {
+      logger.error({ err: error }, "Request interceptor error");
+      return Promise.reject(error);
+    }
+  );
+
+  // Response interceptor
+  client.interceptors.response.use(
+    (response) => {
+      logger.debug({
+        status: response.status,
+        url: response.config.url,
+      }, "HTTP response");
+      return response;
+    },
+    (error: AxiosError) => {
+      if (error.response) {
+        logger.error({
+          status: error.response.status,
+          url: error.config?.url,
+          data: error.response.data,
+        }, "HTTP error response");
+      } else if (error.request) {
+        logger.error({ err: error }, "No response received");
+      }
+      return Promise.reject(error);
+    }
+  );
+
+  return client;
+}
+
+// Usage
+const userClient = createAxiosClient("https://api.example.com");
+
+async function getUser(id: string): Promise<User> {
+  const response = await userClient.get<User>(`/users/${id}`);
+  return response.data;
+}
+```
+
+## Request/Response Types with Zod
+
+```typescript
+// src/modules/users/user-api.client.ts
+
+import { z } from "zod";
+import { fetchJson } from "@/shared/http/fetch-client";
+
+// Define response schemas
+const userResponseSchema = z.object({
+  id: z.string().uuid(),
+  email: z.string().email(),
+  name: z.string(),
+  createdAt: z.string().datetime(),
+});
+
+const usersResponseSchema = z.array(userResponseSchema);
+
+type UserResponse = z.infer<typeof userResponseSchema>;
+
+// Type-safe client with validation
+export class UserApiClient {
+  constructor(private readonly baseUrl: string) {}
+
+  async getUser(id: string): Promise<UserResponse> {
+    const data = await fetchJson(`/users/${id}`, {
+      baseUrl: this.baseUrl,
+    });
+
+    // Validate response
+    return userResponseSchema.parse(data);
+  }
+
+  async getUsers(): Promise<UserResponse[]> {
+    const data = await fetchJson("/users", {
+      baseUrl: this.baseUrl,
+    });
+
+    return usersResponseSchema.parse(data);
+  }
+}
+```
+
+## Retry and Resilience Integration
+
+```typescript
+// src/shared/http/resilient-fetch.ts
+
+import { wrap, retry, circuitBreaker, timeout, handleAll, ExponentialBackoff, ConsecutiveBreaker } from "cockatiel";
+import { fetchJson, HttpError } from "./fetch-client";
+
+// Only retry on network errors and 5xx
+const shouldRetry = (error: unknown): boolean => {
+  if (error instanceof HttpError) {
+    return error.status >= 500;
+  }
+  return error instanceof TypeError; // Network errors
+};
+
+const policy = wrap(
+  timeout(10000),
+  retry(handleAll.orWhen(shouldRetry), {
+    maxAttempts: 3,
+    backoff: new ExponentialBackoff({ initialDelay: 100 }),
+  }),
+  circuitBreaker(handleAll, {
+    halfOpenAfter: 30000,
+    breaker: new ConsecutiveBreaker(5),
+  })
+);
+
+export async function resilientFetch<T>(
+  url: string,
+  options?: RequestInit
+): Promise<T> {
+  return policy.execute(async ({ signal }) => {
+    return fetchJson<T>(url, {
+      ...options,
+      signal,
+    });
+  });
+}
+```
+
+## Mock HTTP for Testing
+
+```typescript
+// src/test/mocks/user-api.mock.ts
+
+import { setupServer } from "msw/node";
+import { http, HttpResponse } from "msw";
+
+const handlers = [
+  http.get("https://api.example.com/users/:id", ({ params }) => {
+    const { id } = params;
+
+    if (id === "not-found") {
+      return new HttpResponse(null, { status: 404 });
+    }
+
+    return HttpResponse.json({
+      id,
+      email: "user@example.com",
+      name: "Test User",
+    });
+  }),
+
+  http.post("https://api.example.com/users", async ({ request }) => {
+    const body = await request.json();
+    return HttpResponse.json(
+      { id: "new-id", ...body },
+      { status: 201 }
+    );
+  }),
+];
+
+export const server = setupServer(...handlers);
+
+// In test setup
+beforeAll(() => server.listen());
+afterEach(() => server.resetHandlers());
+afterAll(() => server.close());
+```
+
+## File Downloads
+
+```typescript
+// src/shared/http/file-download.ts
+
+export async function downloadFile(
+  url: string,
+  destPath: string
+): Promise<void> {
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new HttpError(response.status, response.statusText);
+  }
+
+  const fileStream = createWriteStream(destPath);
+  const body = response.body;
+
+  if (!body) {
+    throw new Error("No response body");
+  }
+
+  await pipeline(Readable.fromWeb(body as any), fileStream);
+}
+
+// Stream large responses
+export async function* streamJson<T>(url: string): AsyncGenerator<T> {
+  const response = await fetch(url);
+  const reader = response.body?.getReader();
+
+  if (!reader) {
+    throw new Error("No response body");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      if (line.trim()) {
+        yield JSON.parse(line) as T;
+      }
+    }
+  }
+}
+```
+
+## Conventions
+
+- Use native fetch for most use cases
+- Use Undici for high-throughput scenarios
+- Always set timeouts on HTTP requests
+- Validate response data with Zod
+- Use typed API client classes
+- Implement retry for transient failures only (5xx, network errors)
+- Add correlation IDs to all requests
+- Log request/response for debugging
+- Use MSW for testing HTTP calls
+
+## Anti-Patterns
+
+- ❌ No timeout on HTTP requests
+- ❌ Retrying non-idempotent requests blindly
+- ❌ Not validating response data
+- ❌ Ignoring HTTP error status codes
+- ❌ Hardcoding base URLs
+- ❌ Not handling network errors
+- ❌ Logging sensitive request/response data
+- ❌ Creating new connections for each request (use pooling)
+
+**See also:** `resilience.mdc`, `testing.mdc`, `error-handling.mdc`

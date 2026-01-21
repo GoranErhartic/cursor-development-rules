@@ -21,7 +21,9 @@ This folder contains a unified, language-agnostic rule system for Cursor AI agen
 │
 └── languages/                 # Language-specific implementations
     ├── csharp/                # .NET / C# (14 files)
-    ├── java/                  # Java / Spring Boot (14 files)
+    ├── java/                  # Java / Spring Boot (17 files)
+    ├── nodejs/                # Node.js / TypeScript (14 files)
+    ├── react/                 # React / TypeScript (15 files)
     └── _template/             # Template for adding new languages
         └── README.md          # Instructions for new languages
 ```
@@ -44,6 +46,8 @@ Files in `patterns/` define language-agnostic concepts:
 Files in `languages/*/` activate based on file globs:
 - C# files (`**/*.cs`) → activate `languages/csharp/` rules
 - Java files (`**/*.java`) → activate `languages/java/` rules
+- TypeScript files (`**/*.ts`) → activate `languages/nodejs/` rules
+- React files (`**/*.tsx`) → activate `languages/react/` rules
 - Implementation details for each pattern
 - Language-specific tools and frameworks
 
@@ -56,8 +60,18 @@ Files in `languages/*/` activate based on file globs:
 
 ### Java / Spring Boot
 - **Framework:** Java 21, Spring Boot 3
-- **Files:** 14 rule files covering JPA, Controllers, Bean Validation, SLF4J, Resilience4j, Spring Cloud Stream, etc.
+- **Files:** 17 rule files covering JPA, Controllers, Bean Validation, SLF4J, Resilience4j, Spring Cloud Stream, etc.
 - **Activation:** `**/*.java` files
+
+### Node.js / TypeScript
+- **Frameworks:** Express, Fastify, NestJS, Hono
+- **Files:** 14 rule files covering Prisma, Zod, Pino, BullMQ, Vitest, Cockatiel, etc.
+- **Activation:** `**/*.ts`, `**/*.mts` files
+
+### React / TypeScript
+- **Framework:** React 18+
+- **Files:** 15 rule files covering components, state management, routing, testing, accessibility, etc.
+- **Activation:** `**/*.tsx` files
 
 ## Adding a New Language
 
@@ -135,6 +149,7 @@ This unified structure replaces the previous separate `.cursor/rules/` (C#) and 
 ### Language Implementation
 - `languages/csharp/ef-core.mdc` shows how to implement with Entity Framework
 - `languages/java/jpa.mdc` shows how to implement with Spring Data JPA
+- `languages/nodejs/orm.mdc` shows how to implement with Prisma/Drizzle
 
 ### Development Workflow
 `development/tdd-planning.mdc` and `development/code-implementation.mdc` define workflows for all languages.

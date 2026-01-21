@@ -1,0 +1,424 @@
+---
+description: "Clean coding principles - readability, method design, cognitive load reduction"
+alwaysApply: true
+---
+
+# Clean Code Principles
+
+## Core Philosophy
+
+> Code is read far more often than it is written. Optimize for the reader.
+
+- Prioritize **readability** over cleverness
+- Write for the maintainer who will read this code in 6 months (it might be you)
+- Clarity beats brevity — verbose but clear is better than terse but cryptic
+
+## Method Parameter Design
+
+### Avoid Boolean Parameters
+
+Boolean parameters hide intent at the call site. The reader cannot understand what `true` means without looking at the method signature.
+
+```
+// BAD - What does 'true' mean?
+processOrder(order, true)
+saveUser(user, false, true)
+
+// GOOD - Intent is clear from method name
+processOrder(order)
+processOrderWithNotification(order)
+
+saveUser(user)
+saveUserWithValidation(user)
+```
+
+**Exception:** Boolean parameters are acceptable when the method name makes the meaning obvious (e.g., `setVisible(true)`).
+
+### Limit Parameter Count
+
+- **Ideal:** 0-3 parameters
+- **Acceptable:** 4 parameters with clear purpose
+- **Refactor:** 5+ parameters — use a parameter object or builder pattern
+
+```
+// BAD - Too many parameters, easy to mix up
+createUser(name, email, age, department, role, isActive, sendWelcome)
+
+// GOOD - Parameter object groups related data
+createUser(CreateUserRequest request)
+```
+
+## Function Structure
+
+### Single Level of Abstraction
+
+Each function should operate at one level of abstraction. Don't mix high-level orchestration with low-level details.
+
+```
+// BAD - Mixed abstraction levels
+function processOrder(order) {
+    validateOrder(order)                           // High-level
+    const tax = order.subtotal * 0.0825            // Low-level detail
+    sendToFulfillment(order)                       // High-level
+    db.query("INSERT INTO audit_log...")           // Low-level detail
+}
+
+// GOOD - Consistent abstraction level
+function processOrder(order) {
+    validateOrder(order)
+    calculateTotals(order)
+    sendToFulfillment(order)
+    logOrderProcessed(order)
+}
+```
+
+### Keep Functions Short
+
+- Aim for ~20 lines (fits on one screen)
+- If a function requires scrolling, consider extracting parts
+- Each function should do one thing well
+
+### Guard Clauses First
+
+Validate inputs and handle edge cases at the top of the function. Return early to avoid deep nesting.
+
+```
+// BAD - Deep nesting
+function getDiscount(user) {
+    if (user != null) {
+        if (user.isActive) {
+            if (user.membershipYears > 5) {
+                return 0.20
+            }
+        }
+    }
+    return 0
+}
+
+// GOOD - Guard clauses with early returns
+function getDiscount(user) {
+    if (user == null) return 0
+    if (!user.isActive) return 0
+    if (user.membershipYears <= 5) return 0
+    
+    return 0.20
+}
+```
+
+### Avoid Deep Nesting
+
+- Maximum 2-3 levels of indentation
+- Use early returns to flatten control flow
+- Extract nested logic into separate functions
+
+## Naming and Intent
+
+### Use Intention-Revealing Names
+
+Names should answer: why it exists, what it does, and how it's used.
+
+```
+// BAD
+int d;                    // elapsed time in days
+List<int[]> theList;      // what kind of list?
+void proc();              // process what?
+
+// GOOD
+int elapsedTimeInDays;
+List<Cell> flaggedCells;
+void processPayment();
+```
+
+### Avoid Abbreviations
+
+Spell out names unless the abbreviation is universally understood.
+
+- **Acceptable:** `id`, `url`, `http`, `db`, `api`
+- **Avoid:** `usr`, `mgr`, `cnt`, `qty`, `btn`, `msg`
+
+### Consistent Vocabulary
+
+Use one word per concept consistently throughout the codebase.
+
+```
+// BAD - Inconsistent naming
+fetchUsers()
+getOrders()
+retrieveProducts()
+loadCustomers()
+
+// GOOD - Consistent verb usage
+getUsers()
+getOrders()
+getProducts()
+getCustomers()
+```
+
+### Avoid Negated Booleans
+
+Positive names are easier to reason about, especially when combined with logical operators.
+
+```
+// BAD - Double negatives are confusing
+if (!user.isNotDisabled) { }
+if (!order.isInvalid) { }
+
+// GOOD - Positive names
+if (user.isEnabled) { }
+if (order.isValid) { }
+```
+
+## Cognitive Load Reduction
+
+### Avoid Clever One-Liners
+
+If a one-liner requires mental unpacking, split it up. The reader's cognitive load matters more than saving lines.
+
+```
+// BAD - Clever but hard to parse
+const result = data?.items?.filter(x => x.active && x.type === 'A')?.map(x => x.value)?.reduce((a, b) => a + b, 0) ?? 0
+
+// GOOD - Clear steps
+const items = data?.items ?? []
+const activeTypeA = items.filter(item => item.active && item.type === 'A')
+const values = activeTypeA.map(item => item.value)
+const total = values.reduce((sum, value) => sum + value, 0)
+```
+
+### Prefer Explicit Over Implicit
+
+Don't rely on hidden behavior or implicit conventions that require tribal knowledge.
+
+```
+// BAD - Implicit behavior
+function save(user) {
+    // Secretly sends email if user is new (not obvious from call site)
+}
+
+// GOOD - Explicit behavior
+function saveUser(user) { }
+function saveNewUserAndSendWelcome(user) { }
+```
+
+### Extract Complex Conditions
+
+Give complex boolean expressions meaningful names.
+
+```
+// BAD - What does this condition mean?
+if (user.age >= 18 && user.hasVerifiedEmail && !user.isSuspended && user.acceptedTerms) {
+    allowPurchase()
+}
+
+// GOOD - Named condition explains intent
+const isEligibleForPurchase = user.age >= 18 
+    && user.hasVerifiedEmail 
+    && !user.isSuspended 
+    && user.acceptedTerms
+
+if (isEligibleForPurchase) {
+    allowPurchase()
+}
+```
+
+## Code Hygiene
+
+### Delete Dead Code
+
+Never comment out code "for later." Version control preserves history. Dead code creates confusion about what's active.
+
+```
+// BAD - Commented code clutters and confuses
+function calculateTotal(items) {
+    // const subtotal = items.reduce((a, b) => a + b.price, 0)
+    // const tax = subtotal * 0.08
+    // return subtotal + tax
+    return items.reduce((sum, item) => sum + item.price * 1.08, 0)
+}
+
+// GOOD - Clean, only active code
+function calculateTotal(items) {
+    return items.reduce((sum, item) => sum + item.price * 1.08, 0)
+}
+```
+
+### No Magic Numbers or Strings
+
+Extract literals into named constants that explain their purpose.
+
+```
+// BAD - What do these numbers mean?
+if (retryCount > 3) { }
+await sleep(86400000)
+if (status === 'A') { }
+
+// GOOD - Self-documenting constants
+const MAX_RETRY_ATTEMPTS = 3
+const ONE_DAY_MS = 24 * 60 * 60 * 1000
+const STATUS_ACTIVE = 'A'
+
+if (retryCount > MAX_RETRY_ATTEMPTS) { }
+await sleep(ONE_DAY_MS)
+if (status === STATUS_ACTIVE) { }
+```
+
+### Comments Explain Why, Not What
+
+Code should be self-explanatory for *what* it does. Comments add value by explaining *why*.
+
+```
+// BAD - States the obvious
+// Increment counter by 1
+counter++
+
+// BAD - Describes what code does
+// Loop through users and check if active
+for (user in users) {
+    if (user.isActive) { }
+}
+
+// GOOD - Explains why
+// Compensate for 0-based index when displaying to users
+displayIndex = index + 1
+
+// GOOD - Explains business context
+// Users inactive for 90+ days lose premium status per policy update 2024-03
+if (daysSinceLastLogin > 90) {
+    revokePremiumStatus(user)
+}
+```
+
+### Fail Fast
+
+Validate inputs at system boundaries. Throw errors early rather than propagating bad state.
+
+```
+// BAD - Error surfaces far from cause
+function processOrder(order) {
+    // ... 50 lines of processing ...
+    sendEmail(order.customer.email)  // NullPointerException here!
+}
+
+// GOOD - Validate upfront
+function processOrder(order) {
+    if (order == null) throw new Error("Order is required")
+    if (order.customer?.email == null) throw new Error("Customer email is required")
+    
+    // Safe to proceed
+}
+```
+
+## Design Principles
+
+### Minimize Side Effects
+
+Functions that modify external state are harder to test and reason about. Isolate side effects to specific locations.
+
+```
+// BAD - Hidden side effect
+function calculateTotal(cart) {
+    cart.lastCalculated = new Date()  // Side effect!
+    return cart.items.reduce(...)
+}
+
+// GOOD - Pure calculation, explicit side effect
+function calculateTotal(items) {
+    return items.reduce(...)
+}
+
+function updateCartWithTotal(cart) {
+    cart.total = calculateTotal(cart.items)
+    cart.lastCalculated = new Date()
+}
+```
+
+### Prefer Immutability
+
+Immutable data is easier to reason about — you don't need to track where it might have changed.
+
+```
+// BAD - Mutates input
+function addItem(cart, item) {
+    cart.items.push(item)
+    return cart
+}
+
+// GOOD - Returns new object
+function addItem(cart, item) {
+    return {
+        ...cart,
+        items: [...cart.items, item]
+    }
+}
+```
+
+### Law of Demeter
+
+Don't chain through objects. Each unit should only talk to its immediate collaborators.
+
+```
+// BAD - Reaching through objects
+user.getAccount().getSettings().getPreferences().getTheme()
+
+// GOOD - Ask for what you need directly
+user.getTheme()
+// or
+userPreferencesService.getTheme(userId)
+```
+
+### Composition Over Inheritance
+
+Favor combining simple objects over building inheritance hierarchies.
+
+### Make Dependencies Explicit
+
+Inject dependencies rather than hiding them. This improves testability and makes relationships clear.
+
+```
+// BAD - Hidden dependency
+class OrderService {
+    processOrder(order) {
+        Database.save(order)  // Hidden static dependency
+        EmailService.send()   // Hidden static dependency
+    }
+}
+
+// GOOD - Explicit dependencies
+class OrderService {
+    constructor(database, emailService) {
+        this.database = database
+        this.emailService = emailService
+    }
+    
+    processOrder(order) {
+        this.database.save(order)
+        this.emailService.send()
+    }
+}
+```
+
+## Pragmatic Rules
+
+### Rule of Three
+
+Don't abstract prematurely. Wait until you see a pattern three times before extracting.
+
+1. First occurrence: Just write it
+2. Second occurrence: Note the duplication, but tolerate it
+3. Third occurrence: Now refactor — you understand the pattern
+
+### Avoid Premature Optimization
+
+Write clear code first. Optimize only when you have evidence of a performance problem.
+
+> "Premature optimization is the root of all evil." — Donald Knuth
+
+### Let Tools Handle Formatting
+
+Don't waste mental energy on formatting decisions. Configure automated formatters and linters once, then forget about it.
+
+- Use your language's standard formatter
+- Run formatting on save or pre-commit
+- Focus debates on logic, not tabs vs spaces
+
+**See also:** `architecture.mdc`, `testing.mdc`

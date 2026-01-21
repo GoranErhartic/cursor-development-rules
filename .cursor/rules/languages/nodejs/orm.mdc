@@ -1,0 +1,677 @@
+---
+description: "Database access patterns - Prisma, Drizzle, TypeORM, migrations, transactions"
+globs: ["**/prisma/**/*.ts", "**/schema.prisma", "**/*Repository*.ts", "**/*repository*.ts", "**/drizzle/**/*.ts"]
+---
+
+# Database Access & ORM Patterns
+
+## ORM Selection
+
+| ORM | Best For | Type Safety | Performance |
+|-----|----------|-------------|-------------|
+| **Prisma** | Most projects, rapid development | Excellent | Good |
+| **Drizzle** | Performance-critical, SQL-first | Excellent | Excellent |
+| **TypeORM** | NestJS, decorator-based | Good | Good |
+| **Kysely** | Query builder only | Excellent | Excellent |
+
+## Prisma (Recommended)
+
+### Schema Definition
+
+```prisma
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String
+  password  String
+  role      Role     @default(USER)
+  posts     Post[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([email])
+  @@map("users")
+}
+
+model Post {
+  id        String   @id @default(uuid())
+  title     String
+  content   String?
+  published Boolean  @default(false)
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  authorId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([authorId])
+  @@map("posts")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+```
+
+### Prisma Client Setup
+
+```typescript
+// src/shared/database/prisma.ts
+
+import { PrismaClient } from "@prisma/client";
+
+const globalForPrisma = globalThis as unknown as {
+  prisma: PrismaClient | undefined;
+};
+
+export const prisma =
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    log:
+      process.env.NODE_ENV === "development"
+        ? ["query", "error", "warn"]
+        : ["error"],
+  });
+
+if (process.env.NODE_ENV !== "production") {
+  globalForPrisma.prisma = prisma;
+}
+
+// Graceful shutdown
+process.on("beforeExit", async () => {
+  await prisma.$disconnect();
+});
+```
+
+### Repository Pattern with Prisma
+
+```typescript
+// src/modules/users/user.repository.ts
+
+import { prisma } from "@/shared/database/prisma";
+import type { User, Prisma } from "@prisma/client";
+
+export interface UserRepository {
+  findById(id: string): Promise<User | null>;
+  findByEmail(email: string): Promise<User | null>;
+  existsByEmail(email: string): Promise<boolean>;
+  findAll(params: FindAllParams): Promise<User[]>;
+  save(data: Prisma.UserCreateInput): Promise<User>;
+  update(id: string, data: Prisma.UserUpdateInput): Promise<User>;
+  delete(id: string): Promise<void>;
+}
+
+interface FindAllParams {
+  page: number;
+  limit: number;
+  search?: string;
+}
+
+export function createUserRepository(): UserRepository {
+  return {
+    async findById(id) {
+      return prisma.user.findUnique({
+        where: { id },
+      });
+    },
+
+    async findByEmail(email) {
+      return prisma.user.findUnique({
+        where: { email },
+      });
+    },
+
+    async existsByEmail(email) {
+      const count = await prisma.user.count({
+        where: { email },
+      });
+      return count > 0;
+    },
+
+    async findAll({ page, limit, search }) {
+      return prisma.user.findMany({
+        where: search
+          ? {
+              OR: [
+                { name: { contains: search, mode: "insensitive" } },
+                { email: { contains: search, mode: "insensitive" } },
+              ],
+            }
+          : undefined,
+        skip: (page - 1) * limit,
+        take: limit,
+        orderBy: { createdAt: "desc" },
+      });
+    },
+
+    async save(data) {
+      return prisma.user.create({ data });
+    },
+
+    async update(id, data) {
+      return prisma.user.update({
+        where: { id },
+        data,
+      });
+    },
+
+    async delete(id) {
+      await prisma.user.delete({ where: { id } });
+    },
+  };
+}
+```
+
+### Prisma Transactions
+
+```typescript
+// Interactive transaction
+async function transferFunds(
+  fromId: string,
+  toId: string,
+  amount: number
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    // Debit from account
+    const from = await tx.account.update({
+      where: { id: fromId },
+      data: { balance: { decrement: amount } },
+    });
+
+    if (from.balance < 0) {
+      throw new Error("Insufficient funds");
+    }
+
+    // Credit to account
+    await tx.account.update({
+      where: { id: toId },
+      data: { balance: { increment: amount } },
+    });
+
+    // Log transaction
+    await tx.transactionLog.create({
+      data: { fromId, toId, amount },
+    });
+  });
+}
+
+// Batch transaction
+async function deleteUserWithPosts(userId: string): Promise<void> {
+  await prisma.$transaction([
+    prisma.post.deleteMany({ where: { authorId: userId } }),
+    prisma.user.delete({ where: { id: userId } }),
+  ]);
+}
+```
+
+### Prisma Migrations
+
+```bash
+# Create migration
+npx prisma migrate dev --name add_user_role
+
+# Apply migrations in production
+npx prisma migrate deploy
+
+# Reset database (development only)
+npx prisma migrate reset
+
+# Generate client after schema changes
+npx prisma generate
+```
+
+## Drizzle ORM
+
+### Schema Definition
+
+```typescript
+// src/shared/database/schema.ts
+
+import {
+  pgTable,
+  uuid,
+  varchar,
+  timestamp,
+  boolean,
+  pgEnum,
+  index,
+} from "drizzle-orm/pg-core";
+import { relations } from "drizzle-orm";
+
+export const roleEnum = pgEnum("role", ["USER", "ADMIN"]);
+
+export const users = pgTable(
+  "users",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    email: varchar("email", { length: 255 }).notNull().unique(),
+    name: varchar("name", { length: 255 }).notNull(),
+    password: varchar("password", { length: 255 }).notNull(),
+    role: roleEnum("role").default("USER").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    emailIdx: index("users_email_idx").on(table.email),
+  })
+);
+
+export const posts = pgTable(
+  "posts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    title: varchar("title", { length: 255 }).notNull(),
+    content: varchar("content", { length: 10000 }),
+    published: boolean("published").default(false).notNull(),
+    authorId: uuid("author_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    authorIdx: index("posts_author_idx").on(table.authorId),
+  })
+);
+
+// Relations
+export const usersRelations = relations(users, ({ many }) => ({
+  posts: many(posts),
+}));
+
+export const postsRelations = relations(posts, ({ one }) => ({
+  author: one(users, {
+    fields: [posts.authorId],
+    references: [users.id],
+  }),
+}));
+```
+
+### Drizzle Client Setup
+
+```typescript
+// src/shared/database/drizzle.ts
+
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
+import * as schema from "./schema";
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
+
+export const db = drizzle(pool, { schema });
+
+// Type for database
+export type Database = typeof db;
+```
+
+### Drizzle Queries
+
+```typescript
+// src/modules/users/user.repository.ts
+
+import { eq, like, or, desc, sql } from "drizzle-orm";
+import { db } from "@/shared/database/drizzle";
+import { users } from "@/shared/database/schema";
+
+export async function findUserById(id: string) {
+  return db.query.users.findFirst({
+    where: eq(users.id, id),
+  });
+}
+
+export async function findUserByEmail(email: string) {
+  return db.query.users.findFirst({
+    where: eq(users.email, email),
+  });
+}
+
+export async function findAllUsers(params: {
+  page: number;
+  limit: number;
+  search?: string;
+}) {
+  const { page, limit, search } = params;
+
+  return db.query.users.findMany({
+    where: search
+      ? or(
+          like(users.name, `%${search}%`),
+          like(users.email, `%${search}%`)
+        )
+      : undefined,
+    offset: (page - 1) * limit,
+    limit,
+    orderBy: desc(users.createdAt),
+  });
+}
+
+export async function createUser(data: typeof users.$inferInsert) {
+  const [user] = await db.insert(users).values(data).returning();
+  return user;
+}
+
+export async function updateUser(
+  id: string,
+  data: Partial<typeof users.$inferInsert>
+) {
+  const [user] = await db
+    .update(users)
+    .set({ ...data, updatedAt: new Date() })
+    .where(eq(users.id, id))
+    .returning();
+  return user;
+}
+
+// With relations
+export async function findUserWithPosts(id: string) {
+  return db.query.users.findFirst({
+    where: eq(users.id, id),
+    with: {
+      posts: {
+        orderBy: desc(posts.createdAt),
+      },
+    },
+  });
+}
+```
+
+### Drizzle Transactions
+
+```typescript
+import { db } from "@/shared/database/drizzle";
+
+async function transferFunds(
+  fromId: string,
+  toId: string,
+  amount: number
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [from] = await tx
+      .update(accounts)
+      .set({ balance: sql`balance - ${amount}` })
+      .where(eq(accounts.id, fromId))
+      .returning();
+
+    if (from.balance < 0) {
+      throw new Error("Insufficient funds");
+    }
+
+    await tx
+      .update(accounts)
+      .set({ balance: sql`balance + ${amount}` })
+      .where(eq(accounts.id, toId));
+  });
+}
+```
+
+### Drizzle Migrations
+
+```bash
+# Generate migration
+npx drizzle-kit generate
+
+# Apply migrations
+npx drizzle-kit migrate
+
+# Push schema (development)
+npx drizzle-kit push
+```
+
+## TypeORM (NestJS)
+
+### Entity Definition
+
+```typescript
+// src/modules/users/entities/user.entity.ts
+
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  UpdateDateColumn,
+  OneToMany,
+  Index,
+} from "typeorm";
+import { Post } from "@/modules/posts/entities/post.entity";
+
+export enum Role {
+  USER = "USER",
+  ADMIN = "ADMIN",
+}
+
+@Entity("users")
+export class User {
+  @PrimaryGeneratedColumn("uuid")
+  id: string;
+
+  @Column({ unique: true })
+  @Index()
+  email: string;
+
+  @Column()
+  name: string;
+
+  @Column()
+  password: string;
+
+  @Column({ type: "enum", enum: Role, default: Role.USER })
+  role: Role;
+
+  @OneToMany(() => Post, (post) => post.author)
+  posts: Post[];
+
+  @CreateDateColumn()
+  createdAt: Date;
+
+  @UpdateDateColumn()
+  updatedAt: Date;
+}
+```
+
+### TypeORM Repository
+
+```typescript
+// src/modules/users/user.repository.ts
+
+import { Injectable } from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository, Like, ILike } from "typeorm";
+import { User } from "./entities/user.entity";
+
+@Injectable()
+export class UserRepository {
+  constructor(
+    @InjectRepository(User)
+    private readonly repository: Repository<User>
+  ) {}
+
+  async findById(id: string): Promise<User | null> {
+    return this.repository.findOne({ where: { id } });
+  }
+
+  async findByEmail(email: string): Promise<User | null> {
+    return this.repository.findOne({ where: { email } });
+  }
+
+  async findAll(params: {
+    page: number;
+    limit: number;
+    search?: string;
+  }): Promise<User[]> {
+    const { page, limit, search } = params;
+
+    return this.repository.find({
+      where: search
+        ? [
+            { name: ILike(`%${search}%`) },
+            { email: ILike(`%${search}%`) },
+          ]
+        : undefined,
+      skip: (page - 1) * limit,
+      take: limit,
+      order: { createdAt: "DESC" },
+    });
+  }
+
+  async save(user: Partial<User>): Promise<User> {
+    return this.repository.save(user);
+  }
+
+  async delete(id: string): Promise<void> {
+    await this.repository.delete(id);
+  }
+}
+```
+
+## Query Optimization
+
+### Select Only Needed Fields
+
+```typescript
+// Prisma
+const users = await prisma.user.findMany({
+  select: {
+    id: true,
+    name: true,
+    email: true,
+    // Don't select password
+  },
+});
+
+// Drizzle
+const users = await db
+  .select({
+    id: users.id,
+    name: users.name,
+    email: users.email,
+  })
+  .from(users);
+```
+
+### Avoid N+1 Queries
+
+```typescript
+// BAD - N+1 queries
+const users = await prisma.user.findMany();
+for (const user of users) {
+  const posts = await prisma.post.findMany({
+    where: { authorId: user.id },
+  });
+}
+
+// GOOD - Include relations
+const users = await prisma.user.findMany({
+  include: {
+    posts: true,
+  },
+});
+
+// GOOD - Drizzle with relations
+const users = await db.query.users.findMany({
+  with: {
+    posts: true,
+  },
+});
+```
+
+### Pagination
+
+```typescript
+// Cursor-based pagination (better for large datasets)
+async function findUsersCursor(cursor?: string, limit = 20) {
+  return prisma.user.findMany({
+    take: limit + 1, // Fetch one extra to check if there's more
+    cursor: cursor ? { id: cursor } : undefined,
+    skip: cursor ? 1 : 0, // Skip the cursor itself
+    orderBy: { createdAt: "desc" },
+  });
+}
+
+// Offset pagination
+async function findUsersOffset(page: number, limit: number) {
+  const [users, total] = await Promise.all([
+    prisma.user.findMany({
+      skip: (page - 1) * limit,
+      take: limit,
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma.user.count(),
+  ]);
+
+  return {
+    data: users,
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+    },
+  };
+}
+```
+
+## Soft Deletes
+
+```typescript
+// Prisma schema
+model User {
+  id        String    @id @default(uuid())
+  deletedAt DateTime?
+  // ...
+}
+
+// Middleware for soft deletes
+prisma.$use(async (params, next) => {
+  if (params.model === "User") {
+    if (params.action === "delete") {
+      params.action = "update";
+      params.args.data = { deletedAt: new Date() };
+    }
+    if (params.action === "findMany" || params.action === "findFirst") {
+      params.args.where = {
+        ...params.args.where,
+        deletedAt: null,
+      };
+    }
+  }
+  return next(params);
+});
+```
+
+## Conventions
+
+- Use repository pattern to abstract database access
+- Always use parameterized queries (handled by ORMs)
+- Use transactions for operations that modify multiple tables
+- Select only needed fields to reduce data transfer
+- Use eager loading to avoid N+1 queries
+- Implement soft deletes for audit trails
+- Use migrations for schema changes
+- Index frequently queried columns
+
+## Anti-Patterns
+
+- ❌ Raw SQL queries with string interpolation
+- ❌ N+1 query problems
+- ❌ Fetching entire tables without pagination
+- ❌ Business logic in repositories (keep in services)
+- ❌ Skipping migrations in production
+- ❌ Exposing database entities directly in API responses
+- ❌ Not using transactions for multi-step operations
+- ❌ Hardcoding connection strings
+
+**See also:** `testing.mdc`, `error-handling.mdc`
