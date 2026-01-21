@@ -1,175 +1,119 @@
----
-description: "Spring REST controller conventions - @RestController, ResponseEntity, API design, HTTP methods"
+﻿---
+description: "Spring REST controller conventions - @RestController, ResponseEntity, OpenAPI, CQRS Dispatcher"
 globs: ["**/*Controller*.java", "**/controller/**/*.java", "**/web/**/*.java"]
 ---
 
 # API Controller Conventions
 
-## Controller Setup
+## Controller Setup (Mandatory)
+
+Controllers MUST implement their corresponding `*Api` interface for OpenAPI documentation.
 
 ```java
+@Slf4j
 @RestController
-@RequestMapping("/api/users")
+@RequestMapping(path = "/api/bff/containers", produces = MediaType.APPLICATION_JSON_VALUE)
 @Validated
-public class UserController {
-    
-    private final UserService userService;
-    
-    public UserController(UserService userService) {
-        this.userService = userService;
-    }
+@RequiredArgsConstructor
+public class ContainerSearchController implements ContainerSearchApi {
+    private final Dispatcher dispatcher;
 }
 ```
 
-- ALWAYS use `@RestController` annotation
-- Use `@RequestMapping` for base path
-- Add `@Validated` for method-level validation
-- Use constructor injection (no `@Autowired` needed in Spring 4.3+)
+**Required annotations:**
+- `@RestController` - REST controller
+- `@RequestMapping` - Base path with produces
+- `@Validated` - Enable method-level validation
+- `@RequiredArgsConstructor` - Constructor injection via Lombok
 
-## HTTP Methods & Status Codes
+## OpenAPI Documentation Pattern (Mandatory)
 
-| Operation | Method | Success | Error |
-|-----------|--------|---------|-------|
-| Get single | GET | 200 OK / 404 Not Found | — |
-| Get list | GET | 200 OK (empty array if none) | — |
-| Create | POST | 201 Created | 400 Bad Request |
-| Update | PUT | 200 OK / 204 No Content | 404 Not Found |
-| Partial | PATCH | 200 OK | 404 Not Found |
-| Delete | DELETE | 204 No Content | 404 Not Found |
+> **API documentation MUST be defined in interfaces, NOT in controllers.**
 
-## Return Types
+This separation keeps controllers clean and provides a single source of truth for API documentation.
+
+### Step 1: Create API Interface (in web/api/)
 
 ```java
-// Single item
-@GetMapping("/{id}")
-public ResponseEntity<UserDto> getById(@PathVariable UUID id) {
-    return userService.findById(id)
-        .map(ResponseEntity::ok)
-        .orElse(ResponseEntity.notFound().build());
-}
-
-// List
-@GetMapping
-public ResponseEntity<List<UserDto>> getAll() {
-    return ResponseEntity.ok(userService.findAll());
-}
-
-// Created
-@PostMapping
-public ResponseEntity<UserDto> create(@Valid @RequestBody CreateUserRequest request) {
-    var user = userService.create(request);
-    return ResponseEntity
-        .created(URI.create("/api/users/" + user.id()))
-        .body(user);
-}
-
-// No content
-@DeleteMapping("/{id}")
-public ResponseEntity<Void> delete(@PathVariable UUID id) {
-    userService.delete(id);
-    return ResponseEntity.noContent().build();
-}
-```
-
-## Path Variables and Request Parameters
-
-```java
-// Path variable with validation
-@GetMapping("/{id}")
-public ResponseEntity<UserDto> getById(
-    @PathVariable @NotNull UUID id) {
-    // ...
-}
-
-// Query parameters
-@GetMapping
-public ResponseEntity<List<UserDto>> search(
-    @RequestParam(required = false) String email,
-    @RequestParam(defaultValue = "0") int page,
-    @RequestParam(defaultValue = "20") int size) {
-    // ...
-}
-
-// Request body
-@PostMapping
-public ResponseEntity<UserDto> create(
-    @Valid @RequestBody CreateUserRequest request) {
-    // ...
-}
-```
-
-## Pagination
-
-```java
-@GetMapping
-public ResponseEntity<Page<UserDto>> getAll(
-    @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC)
-    Pageable pageable) {
-    return ResponseEntity.ok(userService.findAll(pageable));
-}
-```
-
-## Content Negotiation
-
-```java
-@GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-public ResponseEntity<UserDto> getUser(@PathVariable UUID id) {
-    // ...
-}
-
-@PostMapping(
-    consumes = MediaType.APPLICATION_JSON_VALUE,
-    produces = MediaType.APPLICATION_JSON_VALUE)
-public ResponseEntity<UserDto> create(@RequestBody CreateUserRequest request) {
-    // ...
-}
-```
-
-## Conventions
-
-- Use `UUID` for IDs with `@PathVariable`
-- Return `ResponseEntity<T>` for type safety and explicit status codes
-- Use `@Valid` for request body validation
-- Use `@RequestParam`, `@PathVariable`, `@RequestBody` explicitly
-- Validate in controller via Bean Validation, business logic in service
-- Return `ProblemDetail` for errors (see `error-handling.mdc`)
-- Use `@PageableDefault` for pagination defaults
-
-## API Versioning
-
-```java
-@RestController
-@RequestMapping("/api/v1/users")
-public class UserV1Controller {
-    // ...
-}
-
-// Or use header versioning
-@RestController
-@RequestMapping(value = "/api/users", headers = "API-Version=1")
-public class UserController {
-    // ...
-}
-```
-
-## OpenAPI Documentation
-
-```java
-@RestController
-@RequestMapping("/api/users")
-@Tag(name = "Users", description = "User management endpoints")
-public class UserController {
-    
-    @Operation(summary = "Get user by ID", description = "Returns a single user")
+@Tag(name = "Container Search", description = "Operations for searching containers")
+public interface ContainerSearchApi {
+    @Operation(summary = "Search containers by number")
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "User found"),
-        @ApiResponse(responseCode = "404", description = "User not found")
+        @ApiResponse(responseCode = "200", description = "Search completed successfully"),
+        @ApiResponse(responseCode = "400", description = "Invalid request"),
+        @ApiResponse(responseCode = "503", description = "Backend unavailable")
     })
-    @GetMapping("/{id}")
-    public ResponseEntity<UserDto> getById(@PathVariable UUID id) {
-        // ...
+    ResponseEntity<ContainerSearchResponse> searchContainers(
+        @Parameter(description = "Backend system") ExternalApiProvider backend,
+        @Parameter(description = "Container number") String containerNumber,
+        @Parameter(description = "Trade type") String tradeTypeCode);
+}
+```
+
+### Step 2: Controller Implements Interface (Clean)
+
+```java
+@Slf4j
+@RestController
+@RequestMapping(path = "/api/bff/containers", produces = MediaType.APPLICATION_JSON_VALUE)
+@Validated
+@RequiredArgsConstructor
+public class ContainerSearchController implements ContainerSearchApi {
+    private final Dispatcher dispatcher;
+
+    @Override
+    @GetMapping("/search/{backend}")
+    public ResponseEntity<ContainerSearchResponse> searchContainers(
+            @PathVariable ExternalApiProvider backend,
+            @RequestParam("q") String rawContainerNumber,
+            @RequestParam(value = "tradeType", defaultValue = "I") String tradeTypeCode) {
+        // Business logic only - no OpenAPI annotations
     }
 }
 ```
 
-**See also:** `validation.mdc`, `error-handling.mdc`
+### Benefits
+
+| Benefit | Description |
+|---------|-------------|
+| Clean controllers | Controllers contain only business logic |
+| Single source of truth | API docs defined in one place |
+| Contract-first design | Interface defines the API contract |
+| Swagger UI works | Full OpenAPI support |
+
+### File Organization
+
+```
+web/
+  api/                          # OpenAPI documentation interfaces
+    ContainerSearchApi.java     # @Tag, @Operation, @ApiResponses
+    AuthApi.java
+  controller/                   # Clean controllers (implement interfaces)
+    ContainerSearchController.java
+    AuthController.java
+  dto/                          # Request/Response DTOs
+```
+
+## Controller Constraints (Enforced by ArchUnit)
+
+| Allowed | Not Allowed |
+|---------|-------------|
+| Dispatcher | *Handler directly |
+| InputSanitizer | *Port interfaces |
+| Request/Response DTOs | *Client (HTTP clients) |
+| Domain enums | RestClient |
+| Custom validators | Business logic |
+| *Api interfaces | OpenAPI annotations directly |
+
+## Conventions Summary
+
+- Controller implements corresponding *Api interface
+- NO OpenAPI annotations in controllers (only in *Api interfaces)
+- Return ResponseEntity<T> for explicit status codes
+- Use @Valid for request body validation
+- Sanitize ALL user input before processing
+- Use ProblemDetail (RFC 7807) for all error responses
+- Controllers are thin - dispatch and transform only
+- Log requests at INFO level, details at DEBUG level
+
+**See also:** cqrs.mdc, validation.mdc, error-handling.mdc, input-sanitization.mdc

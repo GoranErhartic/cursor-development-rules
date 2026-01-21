@@ -1,4 +1,4 @@
----
+﻿---
 description: "Code quality standards - Java 25 LTS idioms, naming conventions, records, sealed classes, virtual threads"
 globs: ["**/*.java"]
 ---
@@ -8,235 +8,258 @@ globs: ["**/*.java"]
 ## Java 25 LTS Best Practices
 
 ### Use Records for DTOs and Value Objects
+
 ```java
-// DTO
-public record UserDto(UUID id, String email, String name) {}
+// Application layer DTOs
+public record SearchContainersQuery(
+    ExternalApiProvider backend,
+    String containerNumber,
+    TradeType tradeType
+) implements Query<Result<List<ContainerSearchResult>>> {}
 
-// Value Object
-public record Money(BigDecimal amount, String currency) {}
+public record ContainerSearchResult(
+    String containerNumber,
+    String status,
+    String terminalCode
+) {}
 
-// Command
-public record CreateUserCommand(String email, String name) implements Command<Result<UUID>> {}
-```
-
-### Sealed Classes for Domain Hierarchies
-```java
-public sealed interface PaymentMethod permits CreditCard, BankTransfer, PayPal {
-    Money getAmount();
+// Web layer DTOs
+public record ContainerSearchResponse(
+    List<ContainerSearchResultItemResponse> results,
+    int count
+) {
+    public static ContainerSearchResponse fromApplication(List<ContainerSearchResult> results) {
+        return new ContainerSearchResponse(
+            results.stream().map(ContainerSearchResultItemResponse::fromApplication).toList(),
+            results.size()
+        );
+    }
 }
 
-public record CreditCard(String cardNumber, Money amount) implements PaymentMethod {
-    @Override
-    public Money getAmount() { return amount; }
+// Infrastructure DTOs
+public record EModalContainerFeeInventoryDto(
+    String drayUnitId,
+    String containerNumber,
+    String status
+) {}
+
+// Domain value objects
+public record Error(String code, String message) {
+    public Error {
+        if (code == null || code.isBlank()) {
+            throw new IllegalArgumentException("Error code cannot be null or blank");
+        }
+    }
 }
 ```
 
-### Pattern Matching
+### Sealed Classes for Result Pattern
+
 ```java
-return switch (user) {
-    case null -> ResponseEntity.notFound().build();
-    case User u when !u.isActive() -> ResponseEntity.status(HttpStatus.FORBIDDEN).build();
-    default -> ResponseEntity.ok(user);
-};
+public sealed interface Result<T> {
+    record Success<T>(T value) implements Result<T> {}
+    record Failure<T>(Error error) implements Result<T> {}
+    
+    static <T> Result<T> success(T value) { return new Success<>(value); }
+    static <T> Result<T> failure(Error error) { return new Failure<>(error); }
+    
+    default <R> R match(Function<T, R> onSuccess, Function<Error, R> onFailure) {
+        return switch (this) {
+            case Success<T>(var value) -> onSuccess.apply(value);
+            case Failure<T>(var error) -> onFailure.apply(error);
+        };
+    }
+}
 ```
 
-### Text Blocks
+### Pattern Matching with Switch
+
 ```java
-String query = """
-    SELECT u FROM User u
-    WHERE u.email = :email
-    AND u.active = true
-    """;
+// Result pattern matching
+var results = dispatcher.dispatch(query)
+    .getOrThrow(error -> new DomainErrorException(error, mapErrorToHttpStatus(error)));
+
+private HttpStatus mapErrorToHttpStatus(Error error) {
+    return switch (error.code()) {
+        case "Backend.Unsupported" -> HttpStatus.BAD_REQUEST;
+        case "Container.NotFound" -> HttpStatus.NOT_FOUND;
+        case "Backend.ServiceUnavailable" -> HttpStatus.SERVICE_UNAVAILABLE;
+        default -> HttpStatus.INTERNAL_SERVER_ERROR;
+    };
+}
 ```
 
-## Naming Conventions
+### Text Blocks for Multi-line Strings
+
+```java
+@Operation(
+    summary = "Search containers",
+    description = """
+        Searches for containers in the specified backend system.
+        
+        For eModal backend, this retrieves container fee inventory and LFD information.
+        For CargoSprint backend, this retrieves basic container information.
+        """
+)
+```
+
+## Naming Conventions (Enforced by ArchUnit)
 
 | Element | Convention | Example |
 |---------|------------|---------|
-| Class | PascalCase | `UserService` |
-| Interface | PascalCase (NO 'I' prefix) | `UserRepository` |
-| Method | camelCase | `findById` |
-| Parameter | camelCase | `userId` |
-| Private field | camelCase | `userRepository` |
-| Constant | UPPER_SNAKE_CASE | `MAX_RETRY_COUNT` |
-| Package | lowercase | `com.example.user` |
+| Controller | `*Controller` with `@RestController` | `ContainerSearchController` |
+| Query | `*Query` record implementing `Query<T>` | `SearchContainersQuery` |
+| Command | `*Command` record implementing `Command<T>` | `RefreshTokenCommand` |
+| Query Handler | `*QueryHandler` with `@Service` | `SearchContainersQueryHandler` |
+| Command Handler | `*CommandHandler` with `@Service` | `ExchangeAuthCodeCommandHandler` |
+| Result | `*Result` record | `ContainerSearchResult` |
+| Port | `*Port` interface in `common/` | `KeycloakAuthPort` |
+| Strategy | `*Strategy` interface | `ContainerSearchStrategy` |
+| Web Request DTO | `*Request` record | `BulkContainerSearchRequest` |
+| Web Response DTO | `*Response` record | `ContainerSearchResponse` |
+| Infrastructure DTO | `*Dto` record | `EModalContainerDto` |
+| HTTP Client | `*Client` interface | `EModalClient` |
+| Adapter | `*Adapter` class | `KeycloakAuthAdapter` |
+| Filter | `*Filter` extending `OncePerRequestFilter` | `CorrelationIdFilter` |
+| Interceptor | `*Interceptor` implementing `ClientHttpRequestInterceptor` | `TokenPropagationInterceptor` |
+| Config | `*Config` or `*Properties` | `HttpClientConfig`, `BackendProperties` |
 
 ## Self-Documenting Code
 
-- Use **intention-revealing names** — `findActiveUsersByDepartment` not `findUsers`
+- Use **intention-revealing names** â€” `searchContainersByBackend` not `search`
 - Prefer clarity over brevity
 - Comments explain **why**, not **what**
 - Extract complex conditions into named booleans or methods
 
 ```java
 // BAD
-if (u.getStatus() == 1 && u.getCreatedAt().isAfter(LocalDateTime.now().minusDays(30))) { }
+if (r.isSuccess() && r.value() != null && !r.value().isEmpty()) { }
 
 // GOOD
-boolean isRecentlyActiveUser = user.isActive() && user.wasCreatedWithinDays(30);
-if (isRecentlyActiveUser) { }
+var hasResults = result.isSuccess() && !result.getOrElse(List.of()).isEmpty();
+if (hasResults) { }
 ```
 
 ## Anti-Patterns to Avoid
 
-- ❌ God classes with too many responsibilities
-- ❌ Anemic domain models (logic in services, dumb entities)
-- ❌ Premature optimization
-- ❌ Over-engineering for hypothetical requirements
-- ❌ Catching generic `Exception` without proper handling
-- ❌ Magic numbers and hardcoded strings
-- ❌ Circular dependencies
-- ❌ Returning `null` (use `Optional<T>` instead)
+- âŒ God classes with too many responsibilities
+- âŒ Controllers depending on Handlers directly (use Dispatcher)
+- âŒ Controllers depending on Ports or Clients
+- âŒ Premature optimization
+- âŒ Over-engineering for hypothetical requirements
+- âŒ Catching generic `Exception` without proper handling
+- âŒ Magic numbers and hardcoded strings
+- âŒ Circular dependencies between features
+- âŒ Nested record definitions (records must be top-level)
+- âŒ Classes directly in feature root (must be in flow sub-packages)
 
 ## Modern Java Practices
 
 ### Use Optional for Nullable Returns
-```java
-// GOOD
-public Optional<User> findById(UUID id) {
-    return userRepository.findById(id);
-}
 
-// BAD
-public User findById(UUID id) {
-    return userRepository.findById(id).orElse(null);
+```java
+// In handlers - use Result pattern instead
+public Result<List<ContainerSearchResult>> handle(SearchContainersQuery query) {
+    // ...
+    return inventory.isEmpty() 
+        ? Result.failure(DomainErrors.CONTAINER_NOT_FOUND)
+        : Result.success(results);
 }
 ```
 
 ### Use Stream API
+
 ```java
-List<String> activeEmails = users.stream()
-    .filter(User::isActive)
-    .map(User::getEmail)
+var sanitizedIds = InputSanitizer.sanitizeContainerNumbers(request.containerIds());
+
+var results = inventory.stream()
+    .map(item -> ContainerSearchResult.from(item, feeDetails))
     .toList();
 ```
 
 ### Use var for Local Variables
-```java
-var user = userRepository.findById(id).orElseThrow();
-var query = entityManager.createQuery("SELECT u FROM User u", User.class);
-```
-
-## HTTP Clients (RestClient)
-
-### Use RestClient for HTTP Calls
-
-**Spring Boot 4+ provides RestClient** — a modern, fluent HTTP client that replaces RestTemplate.
 
 ```java
-// GOOD - RestClient with builder pattern
-@Service
-public class UserApiClient {
-    
-    private final RestClient restClient;
-    
-    public UserApiClient(RestClient.Builder restClientBuilder) {
-        this.restClient = restClientBuilder
-            .baseUrl("https://api.example.com")
-            .defaultHeader("Accept", "application/json")
-            .build();
-    }
-    
-    public UserDto getUser(UUID userId) {
-        return restClient.get()
-            .uri("/users/{id}", userId)
-            .retrieve()
-            .body(UserDto.class);
-    }
-}
-
-// AVOID - RestTemplate (legacy)
-@Service
-public class LegacyUserClient {
-    private final RestTemplate restTemplate = new RestTemplate(); // Don't use
-}
-```
-
-### Declarative HTTP Interface
-
-```java
-// Define interface
-public interface UserApiClient {
-    
-    @GetExchange("/users/{id}")
-    UserDto getUser(@PathVariable UUID id);
-    
-    @PostExchange("/users")
-    UserDto createUser(@RequestBody CreateUserRequest request);
-}
-
-// Configure as bean
-@Configuration
-public class HttpClientConfig {
-    
-    @Bean
-    public UserApiClient userApiClient(RestClient.Builder builder) {
-        var restClient = builder
-            .baseUrl("https://api.example.com")
-            .build();
-        
-        var factory = HttpServiceProxyFactory
-            .builderFor(RestClientAdapter.create(restClient))
-            .build();
-        
-        return factory.createClient(UserApiClient.class);
-    }
-}
+var query = SearchContainersQuery.fromCode(backend, containerNumber, tradeTypeCode);
+var results = dispatcher.dispatch(query)
+    .getOrThrow(error -> new DomainErrorException(error, mapErrorToHttpStatus(error)));
 ```
 
 ## Virtual Threads
 
-### Enable Virtual Threads
-
-**Java 25+ with Spring Boot 4+** supports virtual threads for improved scalability.
+Virtual threads are enabled for optimal blocking I/O performance:
 
 ```yaml
-# application.yml
 spring:
   threads:
     virtual:
       enabled: true
 ```
 
-### Virtual Thread Considerations
+### Parallel Operations with Virtual Threads
 
 ```java
-// Virtual threads work seamlessly with blocking operations
-@Service
-public class OrderService {
-    
-    private final RestClient restClient;
-    
-    // This method runs on a virtual thread when called from a controller
-    public OrderDto getOrder(UUID orderId) {
-        // Blocking I/O - efficient with virtual threads
-        return restClient.get()
-            .uri("/orders/{id}", orderId)
-            .retrieve()
-            .body(OrderDto.class);
-    }
-}
+// Execute searches in parallel - virtual threads handle blocking efficiently
+var futures = query.containerIds().stream()
+    .map(containerId -> CompletableFuture.supplyAsync(
+        () -> searchSingle(containerId, query.backend(), query.tradeType())
+    ))
+    .toList();
 
-// Use CompletableFuture for parallel operations
-public CompletableFuture<OrderSummary> getOrderSummary(UUID orderId) {
-    var orderFuture = CompletableFuture.supplyAsync(
-        () -> orderClient.getOrder(orderId)
-    );
-    
-    var itemsFuture = CompletableFuture.supplyAsync(
-        () -> itemClient.getItems(orderId)
-    );
-    
-    return orderFuture.thenCombine(itemsFuture, 
-        (order, items) -> new OrderSummary(order, items));
-}
+CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+
+var searchResults = futures.stream()
+    .map(CompletableFuture::join)
+    .toList();
 ```
 
 **Guidelines:**
-- Virtual threads are suitable for I/O-bound operations (database, HTTP calls)
-- Avoid thread pools with virtual threads (use direct execution)
-- Don't use `ThreadLocal` extensively (creates overhead)
-- Blocking operations are fine — virtual threads handle them efficiently
+- Virtual threads are suitable for I/O-bound operations (HTTP calls to backends)
+- Blocking operations are fine â€” virtual threads handle them efficiently
+- Use `CompletableFuture` for parallel aggregation
+
+## Lombok Usage
+
+### Always Use
+
+| Annotation | Use Case |
+|------------|----------|
+| `@Slf4j` | Logging - creates `log` field |
+| `@RequiredArgsConstructor` | Simple DI constructor for final fields |
+| `@Getter` | Exception classes, enums with fields |
+| `@ToString(callSuper = true)` | Exception toString |
+
+### When NOT to Use `@RequiredArgsConstructor`
+
+1. **Constructor has `@Value` annotations**
+2. **Constructor transforms injected dependencies** (e.g., List to Map)
+3. **Constructor extracts values from nested configuration**
+
+```java
+// Manual constructor required for transformation
+@Slf4j
+@Service
+public class SearchContainersQueryHandler {
+    
+    private final Map<ExternalApiProvider, ContainerSearchStrategy> strategies;
+    
+    public SearchContainersQueryHandler(List<ContainerSearchStrategy> strategyList) {
+        this.strategies = strategyList.stream()
+            .collect(Collectors.toMap(ContainerSearchStrategy::getProvider, Function.identity()));
+    }
+}
+```
+
+### Never Use for DTOs
+
+```java
+// GOOD - Use Java records
+public record ContainerSearchResponse(List<ContainerSearchResultItemResponse> results, int count) {}
+
+// BAD - Don't use Lombok for DTOs
+@Data  // Never use this for DTOs
+public class ContainerSearchResponse { ... }
+```
 
 ## Boy Scout Rule
 
@@ -244,6 +267,6 @@ public CompletableFuture<OrderSummary> getOrderSummary(UUID orderId) {
 
 - Fix small issues as you encounter them
 - Remove dead code and unused imports
-- Keep improvements proportional to the task
+- Run `mvn spotless:apply` before committing
 
-**See also:** `architecture.mdc`
+**See also:** `formatting.mdc`, `bff-architecture.mdc`, `cqrs.mdc`
