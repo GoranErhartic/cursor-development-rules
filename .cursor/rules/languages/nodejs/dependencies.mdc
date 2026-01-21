@@ -1,0 +1,277 @@
+---
+description: "Node.js dependencies - npm/pnpm/yarn, package.json, security scanning, licensing"
+globs: ["**/package.json", "**/package-lock.json", "**/pnpm-lock.yaml", "**/yarn.lock", "**/.npmrc"]
+---
+
+# Dependencies & Package Management
+
+## Package Manager Choice
+
+| Manager | Use Case | Lock File |
+|---------|----------|-----------|
+| **pnpm** (Recommended) | Fast, disk-efficient, strict | `pnpm-lock.yaml` |
+| npm | Default, widely supported | `package-lock.json` |
+| yarn | Workspaces, plug'n'play | `yarn.lock` |
+
+## Package.json Best Practices
+
+```json
+{
+  "name": "@company/service-name",
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "express": "^5.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.0.0"
+  }
+}
+```
+
+## Version Pinning Strategy
+
+```json
+{
+  "dependencies": {
+    // Pin exact versions for critical dependencies
+    "express": "5.0.1",
+    
+    // Allow patch updates for stable libraries
+    "zod": "~3.23.0",
+    
+    // Allow minor updates for well-maintained libraries
+    "pino": "^9.0.0"
+  }
+}
+```
+
+- Use exact versions (`5.0.1`) for production-critical packages
+- Use tilde (`~3.23.0`) for patch updates only
+- Use caret (`^9.0.0`) for minor + patch updates
+- ALWAYS commit lock files to version control
+
+## Package Selection Criteria
+
+- **ONLY use free and open-source packages**
+- Acceptable licenses: MIT, Apache 2.0, BSD, ISC, MPL
+- **STOP and ask** before introducing packages with commercial/paid tiers
+- Be cautious with copyleft licenses (GPL, AGPL) — they have viral implications
+- Verify license before adding any new dependency
+- **NEVER use packages that require paid licenses for production use**
+- Favor actively maintained packages with community support
+- Verify security — check for known vulnerabilities
+- Check bundle size impact for frontend-shared code
+
+## Security Scanning
+
+```bash
+# npm - Check for vulnerabilities
+npm audit
+npm audit fix
+
+# pnpm - Security audit
+pnpm audit
+pnpm audit --fix
+
+# Check for outdated packages
+npm outdated
+pnpm outdated
+
+# Use Snyk for deeper analysis
+npx snyk test
+npx snyk monitor
+```
+
+- Enable Dependabot or Renovate for automated updates
+- Review and update dependencies regularly
+- NEVER ignore security advisories
+- Run `npm audit` in CI pipeline
+
+## License Verification
+
+```bash
+# Install license checker
+npm install -g license-checker
+
+# Generate license report
+license-checker --summary
+license-checker --json > licenses.json
+
+# Check for problematic licenses
+license-checker --onlyAllow "MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC"
+```
+
+## Recommended Packages
+
+### Core Runtime
+
+| Purpose | Package |
+|---------|---------|
+| TypeScript execution | tsx |
+| Environment variables | dotenv, @t3-oss/env-core |
+| Configuration | convict, config |
+
+### Web Frameworks
+
+| Purpose | Package |
+|---------|---------|
+| Minimal framework | express (v5), fastify, hono |
+| Full framework | nestjs |
+| API documentation | @asteasolutions/zod-to-openapi |
+
+### Validation
+
+| Purpose | Package |
+|---------|---------|
+| Schema validation | zod |
+| NestJS validation | class-validator, class-transformer |
+
+### Database
+
+| Purpose | Package |
+|---------|---------|
+| ORM (Type-safe) | prisma, drizzle-orm |
+| Query builder | kysely |
+| Migrations | prisma migrate, drizzle-kit |
+
+### Testing
+
+| Purpose | Package |
+|---------|---------|
+| Test runner | vitest |
+| HTTP testing | supertest |
+| Mocking | vitest (built-in), msw |
+| Containers | testcontainers |
+
+### Logging
+
+| Purpose | Package |
+|---------|---------|
+| Structured logging | pino |
+| HTTP logging | pino-http |
+
+### Security
+
+| Purpose | Package |
+|---------|---------|
+| Security headers | helmet |
+| Rate limiting | express-rate-limit, @fastify/rate-limit |
+| CORS | cors, @fastify/cors |
+
+### HTTP Client
+
+| Purpose | Package |
+|---------|---------|
+| Built-in | fetch (Node.js 18+) |
+| Enhanced | ky, got |
+| Performance | undici |
+
+### Messaging
+
+| Purpose | Package |
+|---------|---------|
+| Job queues | bullmq |
+| Event emitter | eventemitter3 |
+
+### Resilience
+
+| Purpose | Package |
+|---------|---------|
+| Retry/Circuit breaker | cockatiel |
+| Timeout | p-timeout |
+
+## Workspace Setup (Monorepo)
+
+### pnpm Workspaces
+
+```yaml
+# pnpm-workspace.yaml
+packages:
+  - "apps/*"
+  - "packages/*"
+```
+
+```json
+// Root package.json
+{
+  "name": "monorepo",
+  "private": true,
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint"
+  }
+}
+```
+
+### Shared Dependencies
+
+```json
+// packages/shared/package.json
+{
+  "name": "@company/shared",
+  "version": "1.0.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  }
+}
+```
+
+## .npmrc Configuration
+
+```ini
+# .npmrc
+engine-strict=true
+save-exact=true
+auto-install-peers=true
+
+# For private registries
+@company:registry=https://npm.company.com/
+//npm.company.com/:_authToken=${NPM_TOKEN}
+```
+
+## Conventions
+
+- Use pnpm for new projects (faster, stricter)
+- Pin Node.js version with `engines` field
+- ALWAYS commit lock files
+- Use `type: "module"` for ES modules
+- Run security audits in CI
+- Keep dependencies up to date (weekly review)
+- Document any third-party dependencies with licensing implications
+- NEVER use deprecated or unmaintained packages
+
+## Anti-Patterns
+
+- ❌ Not committing lock files
+- ❌ Using `*` or `latest` for versions
+- ❌ Ignoring security vulnerabilities
+- ❌ Installing unnecessary dependencies
+- ❌ Mixing package managers in one project
+- ❌ Using `npm install` without `--save` or `--save-dev`
+- ❌ Installing dev dependencies in production
+- ❌ Not specifying Node.js engine version
+
+**See also:** `security.mdc`, `testing.mdc`

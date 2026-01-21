@@ -1,0 +1,520 @@
+---
+description: "Message queues and background jobs - BullMQ, event-driven patterns, job scheduling"
+globs: ["**/*queue*.ts", "**/*job*.ts", "**/workers/**/*.ts", "**/*worker*.ts", "**/*processor*.ts"]
+---
+
+# Messaging & Background Jobs
+
+## BullMQ (Recommended)
+
+BullMQ is a Redis-based queue for background job processing.
+
+### Installation
+
+```bash
+pnpm add bullmq ioredis
+```
+
+### Queue Setup
+
+```typescript
+// src/shared/queue/connection.ts
+
+import { Redis } from "ioredis";
+
+export const redisConnection = new Redis({
+  host: process.env.REDIS_HOST ?? "localhost",
+  port: parseInt(process.env.REDIS_PORT ?? "6379", 10),
+  password: process.env.REDIS_PASSWORD,
+  maxRetriesPerRequest: null, // Required for BullMQ
+});
+
+// Graceful shutdown
+process.on("SIGTERM", async () => {
+  await redisConnection.quit();
+});
+```
+
+```typescript
+// src/shared/queue/queues.ts
+
+import { Queue } from "bullmq";
+import { redisConnection } from "./connection";
+
+// Define queues
+export const emailQueue = new Queue("email", {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: {
+      type: "exponential",
+      delay: 1000,
+    },
+    removeOnComplete: {
+      age: 24 * 3600, // Keep completed jobs for 24 hours
+      count: 1000, // Keep max 1000 completed jobs
+    },
+    removeOnFail: {
+      age: 7 * 24 * 3600, // Keep failed jobs for 7 days
+    },
+  },
+});
+
+export const orderQueue = new Queue("order", {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 5,
+    backoff: {
+      type: "exponential",
+      delay: 2000,
+    },
+  },
+});
+```
+
+### Job Data Types
+
+```typescript
+// src/modules/email/email.types.ts
+
+export interface SendEmailJobData {
+  to: string;
+  subject: string;
+  template: "welcome" | "password-reset" | "order-confirmation";
+  data: Record<string, unknown>;
+}
+
+export interface OrderProcessingJobData {
+  orderId: string;
+  userId: string;
+  action: "process" | "ship" | "cancel";
+}
+```
+
+### Adding Jobs
+
+```typescript
+// src/modules/email/email.service.ts
+
+import { emailQueue } from "@/shared/queue/queues";
+import type { SendEmailJobData } from "./email.types";
+import { logger } from "@/shared/logger";
+
+export class EmailService {
+  async sendWelcomeEmail(userId: string, email: string): Promise<void> {
+    const job = await emailQueue.add(
+      "send-welcome",
+      {
+        to: email,
+        subject: "Welcome!",
+        template: "welcome",
+        data: { userId },
+      } satisfies SendEmailJobData,
+      {
+        priority: 1, // Higher priority
+        delay: 0,
+      }
+    );
+
+    logger.info({ jobId: job.id, email }, "Welcome email job queued");
+  }
+
+  async sendPasswordReset(email: string, token: string): Promise<void> {
+    await emailQueue.add(
+      "password-reset",
+      {
+        to: email,
+        subject: "Password Reset",
+        template: "password-reset",
+        data: { token, expiresIn: "1 hour" },
+      } satisfies SendEmailJobData,
+      {
+        priority: 2,
+      }
+    );
+  }
+}
+```
+
+### Worker (Job Processor)
+
+```typescript
+// src/workers/email.worker.ts
+
+import { Worker, Job } from "bullmq";
+import { redisConnection } from "@/shared/queue/connection";
+import type { SendEmailJobData } from "@/modules/email/email.types";
+import { logger } from "@/shared/logger";
+
+const emailWorker = new Worker<SendEmailJobData>(
+  "email",
+  async (job: Job<SendEmailJobData>) => {
+    const { to, subject, template, data } = job.data;
+
+    logger.info(
+      { jobId: job.id, to, template },
+      "Processing email job"
+    );
+
+    try {
+      // Simulate email sending
+      await sendEmail(to, subject, template, data);
+
+      logger.info(
+        { jobId: job.id, to },
+        "Email sent successfully"
+      );
+
+      return { sent: true, sentAt: new Date().toISOString() };
+    } catch (error) {
+      logger.error(
+        { err: error, jobId: job.id, to },
+        "Failed to send email"
+      );
+      throw error; // Triggers retry
+    }
+  },
+  {
+    connection: redisConnection,
+    concurrency: 5, // Process 5 jobs concurrently
+    limiter: {
+      max: 100, // Max 100 jobs
+      duration: 1000, // Per second
+    },
+  }
+);
+
+// Event handlers
+emailWorker.on("completed", (job, result) => {
+  logger.info({ jobId: job.id, result }, "Job completed");
+});
+
+emailWorker.on("failed", (job, error) => {
+  logger.error(
+    { jobId: job?.id, err: error, attempts: job?.attemptsMade },
+    "Job failed"
+  );
+});
+
+emailWorker.on("error", (error) => {
+  logger.error({ err: error }, "Worker error");
+});
+
+// Graceful shutdown
+process.on("SIGTERM", async () => {
+  await emailWorker.close();
+});
+
+export { emailWorker };
+```
+
+### Scheduled Jobs (Cron)
+
+```typescript
+// src/shared/queue/schedulers.ts
+
+import { Queue, QueueScheduler } from "bullmq";
+import { redisConnection } from "./connection";
+
+export const scheduledQueue = new Queue("scheduled", {
+  connection: redisConnection,
+});
+
+// Add recurring job
+await scheduledQueue.add(
+  "daily-report",
+  { type: "daily" },
+  {
+    repeat: {
+      pattern: "0 9 * * *", // 9 AM daily
+      tz: "America/New_York",
+    },
+  }
+);
+
+// Add delayed job
+await scheduledQueue.add(
+  "reminder",
+  { userId: "123", message: "Don't forget!" },
+  {
+    delay: 24 * 60 * 60 * 1000, // 24 hours
+  }
+);
+
+// Worker for scheduled jobs
+const scheduledWorker = new Worker(
+  "scheduled",
+  async (job) => {
+    switch (job.name) {
+      case "daily-report":
+        await generateDailyReport();
+        break;
+      case "reminder":
+        await sendReminder(job.data.userId, job.data.message);
+        break;
+    }
+  },
+  { connection: redisConnection }
+);
+```
+
+### Job Progress and Events
+
+```typescript
+// Worker with progress reporting
+const processingWorker = new Worker<OrderProcessingJobData>(
+  "order",
+  async (job) => {
+    await job.updateProgress(10);
+    await validateOrder(job.data.orderId);
+
+    await job.updateProgress(30);
+    await processPayment(job.data.orderId);
+
+    await job.updateProgress(60);
+    await updateInventory(job.data.orderId);
+
+    await job.updateProgress(90);
+    await sendConfirmation(job.data.orderId);
+
+    await job.updateProgress(100);
+    return { processed: true };
+  },
+  { connection: redisConnection }
+);
+
+// Listen for progress
+processingWorker.on("progress", (job, progress) => {
+  logger.info({ jobId: job.id, progress }, "Job progress updated");
+});
+```
+
+### Flow (Job Dependencies)
+
+```typescript
+// src/modules/orders/order.flow.ts
+
+import { FlowProducer } from "bullmq";
+import { redisConnection } from "@/shared/queue/connection";
+
+const flowProducer = new FlowProducer({ connection: redisConnection });
+
+async function processOrderFlow(orderId: string): Promise<void> {
+  await flowProducer.add({
+    name: "complete-order",
+    queueName: "order",
+    data: { orderId, step: "complete" },
+    children: [
+      {
+        name: "send-confirmation",
+        queueName: "email",
+        data: { orderId, type: "confirmation" },
+      },
+      {
+        name: "update-inventory",
+        queueName: "inventory",
+        data: { orderId },
+      },
+      {
+        name: "process-payment",
+        queueName: "payment",
+        data: { orderId },
+        children: [
+          {
+            name: "validate-order",
+            queueName: "order",
+            data: { orderId, step: "validate" },
+          },
+        ],
+      },
+    ],
+  });
+}
+```
+
+### Dead Letter Queue
+
+```typescript
+// Handle permanently failed jobs
+const dlqWorker = new Worker(
+  "email",
+  async (job) => {
+    // Regular processing
+  },
+  {
+    connection: redisConnection,
+    settings: {
+      backoffStrategy: (attemptsMade) => {
+        // Custom backoff: 1s, 5s, 30s, 2min, 10min
+        const delays = [1000, 5000, 30000, 120000, 600000];
+        return delays[Math.min(attemptsMade, delays.length - 1)];
+      },
+    },
+  }
+);
+
+dlqWorker.on("failed", async (job, error) => {
+  if (job && job.attemptsMade >= job.opts.attempts!) {
+    // Move to dead letter queue
+    await deadLetterQueue.add("failed-email", {
+      originalJob: job.data,
+      error: error.message,
+      failedAt: new Date().toISOString(),
+      attempts: job.attemptsMade,
+    });
+  }
+});
+```
+
+## Event-Driven Patterns
+
+### Event Emitter
+
+```typescript
+// src/shared/events/event-bus.ts
+
+import { EventEmitter } from "eventemitter3";
+
+interface AppEvents {
+  "user:created": { userId: string; email: string };
+  "order:placed": { orderId: string; userId: string; total: number };
+  "order:shipped": { orderId: string; trackingNumber: string };
+}
+
+class TypedEventBus extends EventEmitter<AppEvents> {}
+
+export const eventBus = new TypedEventBus();
+
+// Subscribe
+eventBus.on("user:created", async ({ userId, email }) => {
+  await emailService.sendWelcomeEmail(userId, email);
+});
+
+eventBus.on("order:placed", async ({ orderId, userId }) => {
+  await orderQueue.add("process", { orderId, userId, action: "process" });
+});
+
+// Publish
+eventBus.emit("user:created", { userId: "123", email: "user@example.com" });
+```
+
+### Domain Events
+
+```typescript
+// src/shared/events/domain-event.ts
+
+export interface DomainEvent<T = unknown> {
+  type: string;
+  aggregateId: string;
+  payload: T;
+  timestamp: Date;
+  correlationId: string;
+}
+
+// src/modules/orders/events/order-placed.event.ts
+
+export interface OrderPlacedPayload {
+  orderId: string;
+  userId: string;
+  items: Array<{ productId: string; quantity: number }>;
+  total: number;
+}
+
+export function createOrderPlacedEvent(
+  payload: OrderPlacedPayload,
+  correlationId: string
+): DomainEvent<OrderPlacedPayload> {
+  return {
+    type: "OrderPlaced",
+    aggregateId: payload.orderId,
+    payload,
+    timestamp: new Date(),
+    correlationId,
+  };
+}
+```
+
+## Queue Monitoring
+
+```typescript
+// src/shared/queue/monitoring.ts
+
+import { Queue } from "bullmq";
+
+export async function getQueueMetrics(queue: Queue) {
+  const [waiting, active, completed, failed, delayed] = await Promise.all([
+    queue.getWaitingCount(),
+    queue.getActiveCount(),
+    queue.getCompletedCount(),
+    queue.getFailedCount(),
+    queue.getDelayedCount(),
+  ]);
+
+  return {
+    name: queue.name,
+    waiting,
+    active,
+    completed,
+    failed,
+    delayed,
+  };
+}
+
+// Express endpoint
+router.get("/queues/metrics", async (req, res) => {
+  const metrics = await Promise.all([
+    getQueueMetrics(emailQueue),
+    getQueueMetrics(orderQueue),
+  ]);
+
+  res.json(metrics);
+});
+```
+
+### Bull Board (UI)
+
+```typescript
+// src/app.ts
+
+import { createBullBoard } from "@bull-board/api";
+import { BullMQAdapter } from "@bull-board/api/bullMQAdapter";
+import { ExpressAdapter } from "@bull-board/express";
+
+const serverAdapter = new ExpressAdapter();
+serverAdapter.setBasePath("/admin/queues");
+
+createBullBoard({
+  queues: [
+    new BullMQAdapter(emailQueue),
+    new BullMQAdapter(orderQueue),
+  ],
+  serverAdapter,
+});
+
+app.use("/admin/queues", serverAdapter.getRouter());
+```
+
+## Conventions
+
+- Define typed job data interfaces
+- Use meaningful job names
+- Set appropriate retry strategies
+- Implement dead letter queues for permanent failures
+- Log all job lifecycle events
+- Monitor queue health metrics
+- Use flow for job dependencies
+- Implement graceful worker shutdown
+- Clean up old completed/failed jobs
+
+## Anti-Patterns
+
+- ❌ Processing jobs synchronously in request handlers
+- ❌ No retry strategy for failed jobs
+- ❌ Ignoring failed jobs
+- ❌ Missing job data validation
+- ❌ No concurrency limits
+- ❌ Storing large data in job payload (use IDs, fetch from DB)
+- ❌ No monitoring of queue health
+- ❌ Missing graceful shutdown
+
+**See also:** `resilience.mdc`, `logging.mdc`, `error-handling.mdc`

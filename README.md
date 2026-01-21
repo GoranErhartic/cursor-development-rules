@@ -15,7 +15,7 @@ This repository contains a comprehensive, language-agnostic rule system for [Cur
 - ✅ **Enterprise security** best practices
 - ✅ **Production-grade** error handling and logging
 - ✅ **CQRS** and Domain-Driven Design patterns
-- ✅ **Multi-language support** (C#/.NET, Java/Spring Boot, and more)
+- ✅ **Multi-language support** (C#/.NET, Java/Spring Boot, Node.js/TypeScript, React, and more)
 
 ## 🚀 Quick Start
 
@@ -86,7 +86,9 @@ Open your project in Cursor, and the AI will automatically:
 │
 └── languages/                 # Language-specific implementations
     ├── csharp/                # .NET / C# (14 files)
-    ├── java/                  # Java / Spring Boot (14 files)
+    ├── java/                  # Java / Spring Boot (17 files)
+    ├── nodejs/                # Node.js / TypeScript (14 files)
+    ├── react/                 # React / TypeScript (15 files)
     └── _template/             # Template for adding new languages
         └── README.md          # Instructions for new languages
 ```
@@ -130,6 +132,7 @@ Comprehensive security guidance:
 Enforces modern language features and best practices:
 - C# 14 / .NET 10 idioms
 - Java 21 features (records, sealed classes, pattern matching)
+- TypeScript 5.6+ strict mode, ESLint, Prettier
 - Nullable reference types
 - Async/await patterns
 - Structured logging
@@ -160,15 +163,15 @@ Enforces modern language features and best practices:
 
 ### Java / Spring Boot
 
-**14 comprehensive rule files** covering:
+**17 comprehensive rule files** covering:
 
 | Category | Files |
 |----------|-------|
 | **Core** | `code-quality`, `testing`, `error-handling`, `dependencies` |
-| **Web** | `controllers`, `validation`, `input-sanitization` |
-| **Data** | `jpa` (Spring Data JPA) |
+| **Web** | `controllers`, `validation`, `input-sanitization`, `http-clients` |
+| **Data** | `jpa` (Spring Data JPA), `aggregation` |
 | **Infrastructure** | `logging` (SLF4J/Logback), `resilience` (Resilience4j), `messaging` (Spring Cloud Stream) |
-| **Patterns** | `cqrs`, `auth` (Spring Security) |
+| **Patterns** | `cqrs`, `bff-architecture`, `auth` (Spring Security) |
 | **Security** | `security`, `auth` |
 
 **Technologies:**
@@ -179,6 +182,48 @@ Enforces modern language features and best practices:
 - Resilience4j (circuit breaker, retry)
 - Spring Cloud Stream (Kafka, RabbitMQ)
 - JUnit 5, AssertJ, Mockito
+
+### Node.js / TypeScript
+
+**14 comprehensive rule files** covering:
+
+| Category | Files |
+|----------|-------|
+| **Core** | `code-quality`, `testing`, `error-handling`, `dependencies` |
+| **Web** | `controllers`, `validation`, `input-sanitization` |
+| **Data** | `orm` (Prisma, Drizzle, TypeORM) |
+| **Infrastructure** | `logging` (Pino, Winston), `resilience` (Cockatiel), `messaging` (BullMQ) |
+| **HTTP** | `http-clients` (fetch, axios, undici) |
+| **Security** | `security` (Helmet, CORS), `auth` (JWT, sessions) |
+
+**Technologies:**
+- Node.js 22+, TypeScript 5.6+
+- Express, Fastify, NestJS, Hono
+- Prisma, Drizzle ORM
+- Zod (validation), class-validator
+- Pino (structured logging)
+- Cockatiel (resilience patterns)
+- BullMQ (job queues)
+- Vitest, Supertest, Testcontainers
+
+### React / TypeScript
+
+**15 comprehensive rule files** covering:
+
+| Category | Files |
+|----------|-------|
+| **Core** | `code-quality`, `components`, `dependencies` |
+| **State** | `state-management`, `data-fetching` |
+| **UI** | `styling`, `forms`, `accessibility`, `routing` |
+| **Quality** | `testing`, `error-handling`, `performance` |
+| **Security** | `security`, `validation`, `input-sanitization` |
+
+**Technologies:**
+- React 18+, TypeScript
+- React Query / TanStack Query
+- React Router
+- React Hook Form, Zod
+- Testing Library, Vitest
 
 ## 🔧 How It Works
 
@@ -201,6 +246,8 @@ Language-agnostic concepts in `patterns/` define:
 Files in `languages/*/` activate based on file extensions:
 - `**/*.cs` → C# rules
 - `**/*.java` → Java rules
+- `**/*.ts`, `**/*.mts` → Node.js/TypeScript rules
+- `**/*.tsx` → React rules
 - Implementation details for each pattern
 
 ## 🎨 Adding a New Language
@@ -217,11 +264,11 @@ The system is designed to be easily extensible. See [`.cursor/rules/languages/_t
 
 **Example languages to add:**
 - Python (FastAPI, Django, Flask)
-- TypeScript (Express, NestJS, Fastify)
 - Go (Gin, Echo, Fiber)
 - Rust (Actix, Rocket, Axum)
 - PHP (Laravel, Symfony)
 - Ruby (Rails, Sinatra)
+- Kotlin (Ktor, Spring Boot)
 
 ## 📝 Rule File Format
 

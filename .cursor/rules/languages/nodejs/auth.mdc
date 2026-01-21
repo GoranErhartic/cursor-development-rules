@@ -1,0 +1,684 @@
+---
+description: "Authentication and authorization - JWT, sessions, Passport, role-based access control"
+globs: ["**/*auth*.ts", "**/*Auth*.ts", "**/passport*.ts", "**/guards/**/*.ts", "**/middleware/auth*.ts"]
+---
+
+# Authentication & Authorization
+
+## JWT Authentication
+
+### Token Types
+
+| Token | Purpose | Lifetime | Storage |
+|-------|---------|----------|---------|
+| Access Token | API authorization | 15 min - 1 hour | Memory/Header |
+| Refresh Token | Get new access token | 7 - 30 days | HttpOnly Cookie |
+| ID Token | User identity (OIDC) | 1 hour | Memory |
+
+### JWT Configuration
+
+```typescript
+// src/shared/auth/jwt.ts
+
+import jwt from "jsonwebtoken";
+import type { JwtPayload } from "jsonwebtoken";
+
+interface TokenPayload {
+  sub: string; // User ID
+  email: string;
+  role: string;
+}
+
+interface TokenPair {
+  accessToken: string;
+  refreshToken: string;
+}
+
+const JWT_SECRET = process.env.JWT_SECRET!;
+const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET!;
+
+if (!JWT_SECRET || !JWT_REFRESH_SECRET) {
+  throw new Error("JWT secrets must be configured");
+}
+
+export function generateTokens(payload: TokenPayload): TokenPair {
+  const accessToken = jwt.sign(payload, JWT_SECRET, {
+    expiresIn: "15m",
+    issuer: "api.example.com",
+    audience: "example.com",
+  });
+
+  const refreshToken = jwt.sign(
+    { sub: payload.sub, type: "refresh" },
+    JWT_REFRESH_SECRET,
+    { expiresIn: "7d" }
+  );
+
+  return { accessToken, refreshToken };
+}
+
+export function verifyAccessToken(token: string): TokenPayload {
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET, {
+      issuer: "api.example.com",
+      audience: "example.com",
+    }) as JwtPayload & TokenPayload;
+
+    return {
+      sub: decoded.sub,
+      email: decoded.email,
+      role: decoded.role,
+    };
+  } catch (error) {
+    if (error instanceof jwt.TokenExpiredError) {
+      throw new UnauthorizedError("Token expired");
+    }
+    if (error instanceof jwt.JsonWebTokenError) {
+      throw new UnauthorizedError("Invalid token");
+    }
+    throw error;
+  }
+}
+
+export function verifyRefreshToken(token: string): { sub: string } {
+  try {
+    const decoded = jwt.verify(token, JWT_REFRESH_SECRET) as JwtPayload;
+    return { sub: decoded.sub as string };
+  } catch {
+    throw new UnauthorizedError("Invalid refresh token");
+  }
+}
+```
+
+### Auth Middleware (Express)
+
+```typescript
+// src/shared/middleware/auth.ts
+
+import type { Request, Response, NextFunction } from "express";
+import { verifyAccessToken } from "@/shared/auth/jwt";
+import { UnauthorizedError, ForbiddenError } from "@/shared/errors/exceptions";
+
+export interface AuthenticatedRequest extends Request {
+  user: {
+    id: string;
+    email: string;
+    role: string;
+  };
+}
+
+export function authenticate(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader?.startsWith("Bearer ")) {
+    throw new UnauthorizedError("Missing or invalid authorization header");
+  }
+
+  const token = authHeader.slice(7);
+  const payload = verifyAccessToken(token);
+
+  (req as AuthenticatedRequest).user = {
+    id: payload.sub,
+    email: payload.email,
+    role: payload.role,
+  };
+
+  next();
+}
+
+export function authorize(...allowedRoles: string[]) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const user = (req as AuthenticatedRequest).user;
+
+    if (!user) {
+      throw new UnauthorizedError("Not authenticated");
+    }
+
+    if (!allowedRoles.includes(user.role)) {
+      throw new ForbiddenError("Insufficient permissions");
+    }
+
+    next();
+  };
+}
+
+// Usage
+router.get("/admin/users", authenticate, authorize("admin"), getUsers);
+router.get("/profile", authenticate, getProfile);
+```
+
+### Auth Middleware (Fastify)
+
+```typescript
+// src/shared/plugins/auth.ts
+
+import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
+import fp from "fastify-plugin";
+import { verifyAccessToken } from "@/shared/auth/jwt";
+
+declare module "fastify" {
+  interface FastifyRequest {
+    user?: {
+      id: string;
+      email: string;
+      role: string;
+    };
+  }
+}
+
+async function authPlugin(fastify: FastifyInstance): Promise<void> {
+  fastify.decorateRequest("user", null);
+
+  fastify.addHook("preHandler", async (request, reply) => {
+    // Skip public routes
+    if (request.routeOptions.config?.public) {
+      return;
+    }
+
+    const authHeader = request.headers.authorization;
+    if (!authHeader?.startsWith("Bearer ")) {
+      reply.code(401).send({ error: "Unauthorized" });
+      return;
+    }
+
+    try {
+      const token = authHeader.slice(7);
+      const payload = verifyAccessToken(token);
+      request.user = {
+        id: payload.sub,
+        email: payload.email,
+        role: payload.role,
+      };
+    } catch {
+      reply.code(401).send({ error: "Invalid token" });
+    }
+  });
+}
+
+export default fp(authPlugin);
+
+// Usage
+fastify.get("/profile", async (request, reply) => {
+  return { user: request.user };
+});
+
+fastify.get(
+  "/public",
+  { config: { public: true } },
+  async (request, reply) => {
+    return { message: "Public endpoint" };
+  }
+);
+```
+
+### NestJS Guards
+
+```typescript
+// src/shared/guards/jwt-auth.guard.ts
+
+import {
+  Injectable,
+  CanActivate,
+  ExecutionContext,
+  UnauthorizedException,
+} from "@nestjs/common";
+import { Reflector } from "@nestjs/core";
+import { verifyAccessToken } from "@/shared/auth/jwt";
+
+export const IS_PUBLIC_KEY = "isPublic";
+export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
+
+export const ROLES_KEY = "roles";
+export const Roles = (...roles: string[]) => SetMetadata(ROLES_KEY, roles);
+
+@Injectable()
+export class JwtAuthGuard implements CanActivate {
+  constructor(private reflector: Reflector) {}
+
+  canActivate(context: ExecutionContext): boolean {
+    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+
+    if (isPublic) {
+      return true;
+    }
+
+    const request = context.switchToHttp().getRequest();
+    const authHeader = request.headers.authorization;
+
+    if (!authHeader?.startsWith("Bearer ")) {
+      throw new UnauthorizedException();
+    }
+
+    try {
+      const token = authHeader.slice(7);
+      const payload = verifyAccessToken(token);
+      request.user = {
+        id: payload.sub,
+        email: payload.email,
+        role: payload.role,
+      };
+      return true;
+    } catch {
+      throw new UnauthorizedException();
+    }
+  }
+}
+
+@Injectable()
+export class RolesGuard implements CanActivate {
+  constructor(private reflector: Reflector) {}
+
+  canActivate(context: ExecutionContext): boolean {
+    const requiredRoles = this.reflector.getAllAndOverride<string[]>(
+      ROLES_KEY,
+      [context.getHandler(), context.getClass()]
+    );
+
+    if (!requiredRoles) {
+      return true;
+    }
+
+    const { user } = context.switchToHttp().getRequest();
+    return requiredRoles.includes(user.role);
+  }
+}
+
+// Usage
+@Controller("users")
+@UseGuards(JwtAuthGuard, RolesGuard)
+export class UserController {
+  @Get()
+  @Roles("admin")
+  findAll() {
+    return this.userService.findAll();
+  }
+
+  @Get("profile")
+  getProfile(@Request() req) {
+    return req.user;
+  }
+
+  @Get("public")
+  @Public()
+  getPublicInfo() {
+    return { message: "Public" };
+  }
+}
+```
+
+## Session Authentication
+
+```typescript
+// src/shared/auth/session.ts
+
+import session from "express-session";
+import RedisStore from "connect-redis";
+import { Redis } from "ioredis";
+
+const redisClient = new Redis({
+  host: process.env.REDIS_HOST,
+  port: parseInt(process.env.REDIS_PORT ?? "6379", 10),
+});
+
+const redisStore = new RedisStore({
+  client: redisClient,
+  prefix: "session:",
+});
+
+export const sessionMiddleware = session({
+  store: redisStore,
+  secret: process.env.SESSION_SECRET!,
+  resave: false,
+  saveUninitialized: false,
+  name: "sessionId",
+  cookie: {
+    secure: process.env.NODE_ENV === "production",
+    httpOnly: true,
+    sameSite: "strict",
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+  },
+});
+
+// Type augmentation
+declare module "express-session" {
+  interface SessionData {
+    userId: string;
+    email: string;
+    role: string;
+  }
+}
+
+// Login
+app.post("/login", async (req, res) => {
+  const { email, password } = req.body;
+  const user = await authService.validateCredentials(email, password);
+
+  if (!user) {
+    res.status(401).json({ error: "Invalid credentials" });
+    return;
+  }
+
+  req.session.userId = user.id;
+  req.session.email = user.email;
+  req.session.role = user.role;
+
+  res.json({ message: "Logged in" });
+});
+
+// Logout
+app.post("/logout", (req, res) => {
+  req.session.destroy((err) => {
+    if (err) {
+      res.status(500).json({ error: "Logout failed" });
+      return;
+    }
+    res.clearCookie("sessionId");
+    res.json({ message: "Logged out" });
+  });
+});
+
+// Auth middleware
+function requireAuth(req: Request, res: Response, next: NextFunction): void {
+  if (!req.session.userId) {
+    res.status(401).json({ error: "Not authenticated" });
+    return;
+  }
+  next();
+}
+```
+
+## Password Hashing
+
+```typescript
+// src/shared/auth/password.ts
+
+import { hash, verify } from "@node-rs/argon2";
+
+// Argon2id configuration (OWASP recommended)
+const hashOptions = {
+  memoryCost: 65536, // 64 MB
+  timeCost: 3,
+  parallelism: 4,
+};
+
+export async function hashPassword(password: string): Promise<string> {
+  return hash(password, hashOptions);
+}
+
+export async function verifyPassword(
+  password: string,
+  hashedPassword: string
+): Promise<boolean> {
+  try {
+    return await verify(hashedPassword, password);
+  } catch {
+    return false;
+  }
+}
+
+// Usage in auth service
+async function register(email: string, password: string): Promise<User> {
+  const hashedPassword = await hashPassword(password);
+  return userRepository.save({ email, password: hashedPassword });
+}
+
+async function login(email: string, password: string): Promise<User | null> {
+  const user = await userRepository.findByEmail(email);
+  if (!user) {
+    // Prevent timing attacks
+    await hashPassword(password);
+    return null;
+  }
+
+  const valid = await verifyPassword(password, user.password);
+  if (!valid) {
+    return null;
+  }
+
+  return user;
+}
+```
+
+## OAuth2 / OIDC
+
+```typescript
+// src/shared/auth/oauth.ts
+
+import { Issuer, generators } from "openid-client";
+
+const googleIssuer = await Issuer.discover(
+  "https://accounts.google.com"
+);
+
+const client = new googleIssuer.Client({
+  client_id: process.env.GOOGLE_CLIENT_ID!,
+  client_secret: process.env.GOOGLE_CLIENT_SECRET!,
+  redirect_uris: ["https://example.com/auth/callback"],
+  response_types: ["code"],
+});
+
+// Start OAuth flow
+app.get("/auth/google", (req, res) => {
+  const codeVerifier = generators.codeVerifier();
+  const codeChallenge = generators.codeChallenge(codeVerifier);
+
+  req.session.codeVerifier = codeVerifier;
+
+  const authUrl = client.authorizationUrl({
+    scope: "openid email profile",
+    code_challenge: codeChallenge,
+    code_challenge_method: "S256",
+    state: generators.state(),
+  });
+
+  res.redirect(authUrl);
+});
+
+// Handle callback
+app.get("/auth/callback", async (req, res) => {
+  const params = client.callbackParams(req);
+  const codeVerifier = req.session.codeVerifier;
+
+  const tokenSet = await client.callback(
+    "https://example.com/auth/callback",
+    params,
+    { code_verifier: codeVerifier }
+  );
+
+  const userinfo = await client.userinfo(tokenSet);
+
+  // Find or create user
+  let user = await userRepository.findByEmail(userinfo.email!);
+  if (!user) {
+    user = await userRepository.save({
+      email: userinfo.email!,
+      name: userinfo.name!,
+      provider: "google",
+      providerId: userinfo.sub,
+    });
+  }
+
+  // Create session or JWT
+  const tokens = generateTokens({
+    sub: user.id,
+    email: user.email,
+    role: user.role,
+  });
+
+  res.cookie("refreshToken", tokens.refreshToken, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "strict",
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
+
+  res.redirect(`/app?token=${tokens.accessToken}`);
+});
+```
+
+## Refresh Token Flow
+
+```typescript
+// src/modules/auth/auth.controller.ts
+
+router.post("/refresh", async (req, res) => {
+  const refreshToken = req.cookies.refreshToken;
+
+  if (!refreshToken) {
+    res.status(401).json({ error: "Refresh token required" });
+    return;
+  }
+
+  try {
+    // Verify refresh token
+    const { sub: userId } = verifyRefreshToken(refreshToken);
+
+    // Check if token is revoked
+    const isRevoked = await tokenStore.isRevoked(refreshToken);
+    if (isRevoked) {
+      res.status(401).json({ error: "Token revoked" });
+      return;
+    }
+
+    // Get user
+    const user = await userRepository.findById(userId);
+    if (!user) {
+      res.status(401).json({ error: "User not found" });
+      return;
+    }
+
+    // Generate new tokens
+    const tokens = generateTokens({
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+    });
+
+    // Rotate refresh token
+    await tokenStore.revoke(refreshToken);
+
+    res.cookie("refreshToken", tokens.refreshToken, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "strict",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    res.json({ accessToken: tokens.accessToken });
+  } catch {
+    res.status(401).json({ error: "Invalid refresh token" });
+  }
+});
+
+router.post("/logout", authenticate, async (req, res) => {
+  const refreshToken = req.cookies.refreshToken;
+
+  if (refreshToken) {
+    await tokenStore.revoke(refreshToken);
+  }
+
+  res.clearCookie("refreshToken");
+  res.json({ message: "Logged out" });
+});
+```
+
+## API Key Authentication
+
+```typescript
+// src/shared/middleware/api-key.ts
+
+export function apiKeyAuth(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  const apiKey = req.headers["x-api-key"];
+
+  if (!apiKey || typeof apiKey !== "string") {
+    res.status(401).json({ error: "API key required" });
+    return;
+  }
+
+  // Constant-time comparison to prevent timing attacks
+  const validKey = process.env.API_KEY!;
+  const isValid = timingSafeEqual(
+    Buffer.from(apiKey),
+    Buffer.from(validKey)
+  );
+
+  if (!isValid) {
+    res.status(401).json({ error: "Invalid API key" });
+    return;
+  }
+
+  next();
+}
+
+// For multiple API keys with scopes
+interface ApiKeyConfig {
+  key: string;
+  scopes: string[];
+  clientId: string;
+}
+
+const apiKeys = new Map<string, ApiKeyConfig>();
+
+export function scopedApiKeyAuth(...requiredScopes: string[]) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const apiKey = req.headers["x-api-key"] as string;
+
+    if (!apiKey) {
+      res.status(401).json({ error: "API key required" });
+      return;
+    }
+
+    const config = apiKeys.get(apiKey);
+    if (!config) {
+      res.status(401).json({ error: "Invalid API key" });
+      return;
+    }
+
+    const hasScopes = requiredScopes.every((scope) =>
+      config.scopes.includes(scope)
+    );
+    if (!hasScopes) {
+      res.status(403).json({ error: "Insufficient permissions" });
+      return;
+    }
+
+    (req as any).apiClient = { id: config.clientId, scopes: config.scopes };
+    next();
+  };
+}
+```
+
+## Conventions
+
+- Store secrets in environment variables
+- Use Argon2id for password hashing
+- Set short expiry for access tokens (15 min)
+- Store refresh tokens in HttpOnly cookies
+- Implement token rotation on refresh
+- Use constant-time comparison for secrets
+- Log authentication events
+- Implement account lockout after failed attempts
+
+## Anti-Patterns
+
+- ❌ Storing JWT secrets in code
+- ❌ Long-lived access tokens
+- ❌ Storing tokens in localStorage (XSS vulnerable)
+- ❌ Not validating token claims (issuer, audience)
+- ❌ Using MD5/SHA1 for password hashing
+- ❌ Missing CSRF protection for cookie-based auth
+- ❌ Not rotating refresh tokens
+- ❌ Exposing user IDs in tokens without necessity
+
+**See also:** `security.mdc`, `validation.mdc`, `error-handling.mdc`

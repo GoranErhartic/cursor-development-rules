@@ -1,0 +1,490 @@
+---
+description: "Testing strategy - TDD workflow, Vitest, Supertest, Testcontainers, mocking patterns"
+globs: ["**/*.test.ts", "**/*.spec.ts", "**/test/**/*.ts", "**/vitest.config.ts", "**/jest.config.*"]
+---
+
+# Testing Strategy
+
+## TDD Workflow (Mandatory)
+
+1. **RED** — Write a failing test first
+2. **GREEN** — Write minimal code to pass
+3. **REFACTOR** — Clean up while tests stay green
+
+**No implementation without tests first.**
+
+## Vitest Configuration (Recommended)
+
+```typescript
+// vitest.config.ts
+import { defineConfig } from "vitest/config";
+import path from "node:path";
+
+export default defineConfig({
+  test: {
+    globals: true,
+    environment: "node",
+    include: ["src/**/*.test.ts", "src/**/*.spec.ts"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "json", "html"],
+      exclude: ["node_modules", "dist", "**/*.d.ts", "**/*.test.ts"],
+    },
+    setupFiles: ["./src/test/setup.ts"],
+  },
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+    },
+  },
+});
+```
+
+## Test Structure (AAA Pattern)
+
+```typescript
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { UserService } from "./user.service";
+import { UserRepository } from "./user.repository";
+
+describe("UserService", () => {
+  let userService: UserService;
+  let userRepository: UserRepository;
+
+  beforeEach(() => {
+    userRepository = {
+      findById: vi.fn(),
+      save: vi.fn(),
+      existsByEmail: vi.fn(),
+    } as unknown as UserRepository;
+
+    userService = new UserService(userRepository);
+  });
+
+  describe("createUser", () => {
+    it("should create user when email is unique", async () => {
+      // Arrange
+      const request = { email: "test@example.com", name: "Test User" };
+      vi.mocked(userRepository.existsByEmail).mockResolvedValue(false);
+      vi.mocked(userRepository.save).mockResolvedValue({
+        id: "user-123",
+        ...request,
+      });
+
+      // Act
+      const result = await userService.createUser(request);
+
+      // Assert
+      expect(result.isSuccess).toBe(true);
+      expect(result.data).toEqual({
+        id: "user-123",
+        email: "test@example.com",
+        name: "Test User",
+      });
+      expect(userRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ email: "test@example.com" })
+      );
+    });
+
+    it("should return failure when email already exists", async () => {
+      // Arrange
+      const request = { email: "existing@example.com", name: "Test User" };
+      vi.mocked(userRepository.existsByEmail).mockResolvedValue(true);
+
+      // Act
+      const result = await userService.createUser(request);
+
+      // Assert
+      expect(result.isSuccess).toBe(false);
+      expect(result.error?.code).toBe("EMAIL_EXISTS");
+      expect(userRepository.save).not.toHaveBeenCalled();
+    });
+  });
+});
+```
+
+## Naming Convention
+
+```
+{methodName}_should{expectedBehavior}_when{condition}
+```
+
+Examples:
+- `createUser_shouldReturnSuccess_whenEmailIsUnique`
+- `createUser_shouldReturnFailure_whenEmailExists`
+- `findById_shouldReturnUndefined_whenUserNotFound`
+
+Or use descriptive strings in `it()`:
+- `it("should create user when email is unique")`
+- `it("should return failure when email already exists")`
+
+## Mocking with Vitest
+
+```typescript
+import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
+
+// Mock a module
+vi.mock("./user.repository", () => ({
+  UserRepository: vi.fn().mockImplementation(() => ({
+    findById: vi.fn(),
+    save: vi.fn(),
+  })),
+}));
+
+// Mock a function
+const mockFetch = vi.fn();
+vi.stubGlobal("fetch", mockFetch);
+
+// Spy on existing function
+const logSpy = vi.spyOn(console, "log");
+
+// Mock timers
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+it("should timeout after 5 seconds", async () => {
+  const promise = someAsyncOperation();
+  vi.advanceTimersByTime(5000);
+  await expect(promise).rejects.toThrow("Timeout");
+});
+```
+
+## HTTP Testing with Supertest
+
+```typescript
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import request from "supertest";
+import { createApp } from "./app";
+import type { Express } from "express";
+
+describe("User API", () => {
+  let app: Express;
+
+  beforeAll(() => {
+    app = createApp();
+  });
+
+  describe("GET /api/users/:id", () => {
+    it("should return user when found", async () => {
+      const response = await request(app)
+        .get("/api/users/user-123")
+        .expect("Content-Type", /json/)
+        .expect(200);
+
+      expect(response.body).toEqual({
+        id: "user-123",
+        email: "test@example.com",
+        name: "Test User",
+      });
+    });
+
+    it("should return 404 when user not found", async () => {
+      const response = await request(app)
+        .get("/api/users/non-existent")
+        .expect(404);
+
+      expect(response.body).toMatchObject({
+        status: 404,
+        title: "Not Found",
+      });
+    });
+  });
+
+  describe("POST /api/users", () => {
+    it("should create user with valid data", async () => {
+      const response = await request(app)
+        .post("/api/users")
+        .send({ email: "new@example.com", name: "New User" })
+        .expect("Content-Type", /json/)
+        .expect(201);
+
+      expect(response.body).toMatchObject({
+        email: "new@example.com",
+        name: "New User",
+      });
+      expect(response.body.id).toBeDefined();
+    });
+
+    it("should return 400 for invalid email", async () => {
+      const response = await request(app)
+        .post("/api/users")
+        .send({ email: "invalid-email", name: "Test" })
+        .expect(400);
+
+      expect(response.body.errors).toBeDefined();
+    });
+  });
+});
+```
+
+## Integration Tests with Testcontainers
+
+```typescript
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { PostgreSqlContainer, StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { PrismaClient } from "@prisma/client";
+
+describe("UserRepository Integration", () => {
+  let container: StartedPostgreSqlContainer;
+  let prisma: PrismaClient;
+
+  beforeAll(async () => {
+    // Start PostgreSQL container
+    container = await new PostgreSqlContainer("postgres:16-alpine")
+      .withDatabase("testdb")
+      .withUsername("test")
+      .withPassword("test")
+      .start();
+
+    // Configure Prisma with container URL
+    process.env.DATABASE_URL = container.getConnectionUri();
+    prisma = new PrismaClient();
+
+    // Run migrations
+    await prisma.$executeRaw`CREATE TABLE users (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      email VARCHAR(255) UNIQUE NOT NULL,
+      name VARCHAR(255) NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`;
+  }, 60000); // 60s timeout for container startup
+
+  afterAll(async () => {
+    await prisma.$disconnect();
+    await container.stop();
+  });
+
+  it("should save and retrieve user", async () => {
+    // Arrange
+    const userData = { email: "test@example.com", name: "Test User" };
+
+    // Act
+    const created = await prisma.user.create({ data: userData });
+    const found = await prisma.user.findUnique({ where: { id: created.id } });
+
+    // Assert
+    expect(found).toMatchObject(userData);
+    expect(found?.id).toBe(created.id);
+  });
+
+  it("should enforce unique email constraint", async () => {
+    // Arrange
+    await prisma.user.create({
+      data: { email: "duplicate@example.com", name: "User 1" },
+    });
+
+    // Act & Assert
+    await expect(
+      prisma.user.create({
+        data: { email: "duplicate@example.com", name: "User 2" },
+      })
+    ).rejects.toThrow();
+  });
+});
+```
+
+## Testing with MSW (Mock Service Worker)
+
+```typescript
+import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
+import { setupServer } from "msw/node";
+import { http, HttpResponse } from "msw";
+import { UserApiClient } from "./user-api-client";
+
+const server = setupServer(
+  http.get("https://api.example.com/users/:id", ({ params }) => {
+    const { id } = params;
+    if (id === "not-found") {
+      return new HttpResponse(null, { status: 404 });
+    }
+    return HttpResponse.json({
+      id,
+      email: "test@example.com",
+      name: "Test User",
+    });
+  }),
+
+  http.post("https://api.example.com/users", async ({ request }) => {
+    const body = await request.json();
+    return HttpResponse.json({ id: "new-user", ...body }, { status: 201 });
+  })
+);
+
+beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
+afterAll(() => server.close());
+afterEach(() => server.resetHandlers());
+
+describe("UserApiClient", () => {
+  const client = new UserApiClient("https://api.example.com");
+
+  it("should fetch user by id", async () => {
+    const user = await client.getUser("user-123");
+    expect(user).toEqual({
+      id: "user-123",
+      email: "test@example.com",
+      name: "Test User",
+    });
+  });
+
+  it("should handle not found", async () => {
+    await expect(client.getUser("not-found")).rejects.toThrow("User not found");
+  });
+
+  it("should create user", async () => {
+    const user = await client.createUser({
+      email: "new@example.com",
+      name: "New User",
+    });
+    expect(user.id).toBe("new-user");
+  });
+});
+```
+
+## Parameterized Tests
+
+```typescript
+import { describe, it, expect } from "vitest";
+
+describe("validateEmail", () => {
+  it.each([
+    ["test@example.com", true],
+    ["user.name@domain.org", true],
+    ["invalid-email", false],
+    ["@nodomain.com", false],
+    ["", false],
+  ])('validateEmail("%s") should return %s', (email, expected) => {
+    expect(validateEmail(email)).toBe(expected);
+  });
+
+  it.each`
+    email                  | valid    | reason
+    ${"test@example.com"}  | ${true}  | ${"standard email"}
+    ${"invalid"}           | ${false} | ${"missing @"}
+    ${"@example.com"}      | ${false} | ${"missing local part"}
+  `('$email should be $valid ($reason)', ({ email, valid }) => {
+    expect(validateEmail(email)).toBe(valid);
+  });
+});
+```
+
+## Test Fixtures and Factories
+
+```typescript
+// test/factories/user.factory.ts
+import { faker } from "@faker-js/faker";
+import type { User, CreateUserRequest } from "@/modules/users/user.types";
+
+export function createUserRequest(
+  overrides?: Partial<CreateUserRequest>
+): CreateUserRequest {
+  return {
+    email: faker.internet.email(),
+    name: faker.person.fullName(),
+    ...overrides,
+  };
+}
+
+export function createUser(overrides?: Partial<User>): User {
+  return {
+    id: faker.string.uuid(),
+    email: faker.internet.email(),
+    name: faker.person.fullName(),
+    createdAt: faker.date.past(),
+    ...overrides,
+  };
+}
+
+// Usage in tests
+it("should create user", async () => {
+  const request = createUserRequest({ email: "specific@example.com" });
+  const result = await userService.createUser(request);
+  expect(result.data?.email).toBe("specific@example.com");
+});
+```
+
+## Test Configuration
+
+```typescript
+// src/test/setup.ts
+import { beforeAll, afterAll, afterEach } from "vitest";
+import { vi } from "vitest";
+
+// Reset mocks after each test
+afterEach(() => {
+  vi.clearAllMocks();
+});
+
+// Global test setup
+beforeAll(() => {
+  // Set test environment variables
+  process.env.NODE_ENV = "test";
+  process.env.LOG_LEVEL = "silent";
+});
+
+// Global cleanup
+afterAll(() => {
+  vi.restoreAllMocks();
+});
+```
+
+## Test Quality Standards
+
+- Tests MUST be deterministic and isolated
+- Tests MUST NOT depend on execution order
+- Mock external dependencies in unit tests
+- Use Testcontainers for real database in integration tests
+- Aim for meaningful coverage, not arbitrary percentages
+- Each test should test ONE behavior
+- Use descriptive test names
+- Keep tests simple and readable
+
+## Coverage Requirements
+
+```typescript
+// vitest.config.ts
+export default defineConfig({
+  test: {
+    coverage: {
+      statements: 80,
+      branches: 80,
+      functions: 80,
+      lines: 80,
+      exclude: [
+        "**/*.d.ts",
+        "**/index.ts", // barrel exports
+        "**/types/**",
+        "**/test/**",
+      ],
+    },
+  },
+});
+```
+
+## Conventions
+
+- Unit tests: Test individual components in isolation with mocks
+- Integration tests: Test interactions with database using Testcontainers
+- E2E tests: Test full request/response cycle with Supertest
+- Use Vitest for modern, fast testing (preferred over Jest)
+- Use MSW for mocking external HTTP calls
+- ALWAYS clean up test data between tests
+- Mock time-dependent code (use `vi.useFakeTimers()`)
+- Run tests in CI on every push
+
+## Anti-Patterns
+
+- ❌ Writing tests after implementation
+- ❌ Testing implementation details instead of behavior
+- ❌ Sharing state between tests
+- ❌ Using real external services in unit tests
+- ❌ Ignoring flaky tests
+- ❌ Testing private methods directly
+- ❌ Overly complex test setup
+- ❌ Not testing error cases
+
+**See also:** `error-handling.mdc`, `controllers.mdc`, `orm.mdc`
