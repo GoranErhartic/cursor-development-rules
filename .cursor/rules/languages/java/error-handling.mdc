@@ -1,32 +1,29 @@
----
-description: "Error handling patterns - @ControllerAdvice, Result pattern, ProblemDetail (RFC 7807)"
+﻿---
+description: "Error handling patterns - Result pattern, GlobalExceptionHandler, ProblemDetail (RFC 7807)"
 globs: ["**/*Exception*.java", "**/*Error*.java", "**/*Result*.java", "**/*Advice*.java"]
 ---
 
 # Error Handling
 
-## Result Pattern
+## Result Pattern (Domain Layer)
+
+Located in `domain/common/`:
 
 ```java
-// Non-generic Result for operations without return values
-public sealed interface Result {
-    record Success() implements Result {}
-    record Failure(Error error) implements Result {}
-    
-    static Result success() { return new Success(); }
-    static Result failure(Error error) { return new Failure(error); }
-    
-    default boolean isSuccess() { return this instanceof Success; }
-    default boolean isFailure() { return this instanceof Failure; }
-}
-
-// Generic Result for operations with return values
+/**
+ * Result pattern for explicit success/failure handling.
+ * Use for domain operations where failure is an expected outcome.
+ * Do NOT use for unexpected technical failures â€” those should throw exceptions.
+ */
 public sealed interface Result<T> {
     record Success<T>(T value) implements Result<T> {}
     record Failure<T>(Error error) implements Result<T> {}
     
     static <T> Result<T> success(T value) { return new Success<>(value); }
     static <T> Result<T> failure(Error error) { return new Failure<>(error); }
+    static <T> Result<T> failure(String code, String message) { 
+        return new Failure<>(new Error(code, message)); 
+    }
     
     default boolean isSuccess() { return this instanceof Success<T>; }
     default boolean isFailure() { return this instanceof Failure<T>; }
@@ -37,140 +34,310 @@ public sealed interface Result<T> {
             case Failure<T>(var error) -> onFailure.apply(error);
         };
     }
+    
+    default <X extends RuntimeException> T getOrThrow(Function<Error, X> exceptionFactory) {
+        return switch (this) {
+            case Success<T>(var value) -> value;
+            case Failure<T>(var error) -> throw exceptionFactory.apply(error);
+        };
+    }
 }
 
-public record Error(String code, String message) {}
+public record Error(String code, String message) {
+    public Error {
+        if (code == null || code.isBlank()) {
+            throw new IllegalArgumentException("Error code cannot be null or blank");
+        }
+        if (message == null || message.isBlank()) {
+            throw new IllegalArgumentException("Error message cannot be null or blank");
+        }
+    }
+}
+```
 
-// Domain errors as static members
-public final class UserErrors {
-    public static final Error NOT_FOUND = new Error("User.NotFound", "User was not found");
-    public static final Error EMAIL_ALREADY_EXISTS = new Error("User.EmailExists", "Email already exists");
+## Domain Errors
+
+```java
+public final class DomainErrors {
+    public static final Error UNSUPPORTED_BACKEND = 
+        new Error("Backend.Unsupported", "Unsupported backend provider");
+    public static final Error CONTAINER_NOT_FOUND = 
+        new Error("Container.NotFound", "Container not found");
+    public static final Error SERVICE_UNAVAILABLE = 
+        new Error("Backend.ServiceUnavailable", "Backend service is unavailable");
+    public static final Error EMODAL_UNAVAILABLE = 
+        new Error("Backend.EModalUnavailable", "eModal service is unavailable");
+    public static final Error TOKEN_REFRESH_FAILED = 
+        new Error("Auth.TokenRefreshFailed", "Failed to refresh token");
     
-    private UserErrors() {}
+    private DomainErrors() {}
+}
+```
+
+## DomainErrorException (Web Layer)
+
+Bridge between domain Result failures and HTTP responses:
+
+```java
+public class DomainErrorException extends RuntimeException {
+    
+    private final Error error;
+    private final HttpStatus httpStatus;
+    
+    public DomainErrorException(Error error, HttpStatus httpStatus) {
+        super(error.message());
+        this.error = error;
+        this.httpStatus = httpStatus;
+    }
+    
+    public String getErrorCode() { return error.code(); }
+    public HttpStatus getHttpStatus() { return httpStatus; }
+}
+```
+
+## Controller Error Mapping Pattern
+
+```java
+@GetMapping("/search/{backend}")
+public ResponseEntity<ContainerSearchResponse> search(
+        @PathVariable ExternalApiProvider backend,
+        @RequestParam("q") @ValidContainerNumber String containerNumber) {
+    
+    var query = new SearchContainersQuery(backend, containerNumber, TradeType.IMPORT);
+    
+    // getOrThrow converts Result.Failure to exception
+    var results = dispatcher.dispatch(query)
+        .getOrThrow(error -> new DomainErrorException(error, mapErrorToHttpStatus(error)));
+    
+    return ResponseEntity.ok(ContainerSearchResponse.fromApplication(results));
+}
+
+private HttpStatus mapErrorToHttpStatus(Error error) {
+    return switch (error.code()) {
+        case "Backend.Unsupported", "BulkSearch.EmptyContainerIds" -> HttpStatus.BAD_REQUEST;
+        case "Container.NotFound" -> HttpStatus.NOT_FOUND;
+        case "Search.Failed", "Backend.EModalUnavailable", 
+             "Backend.CargoSprintUnavailable", "Backend.ServiceUnavailable" -> HttpStatus.SERVICE_UNAVAILABLE;
+        default -> HttpStatus.INTERNAL_SERVER_ERROR;
+    };
 }
 ```
 
 ## Global Exception Handler
 
 ```java
-@RestControllerAdvice
 @Slf4j
+@RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    private static final URI BACKEND_ERROR_TYPE = URI.create("https://cargosprint.com/problems/backend-error");
+    private static final URI DOMAIN_ERROR_TYPE = URI.create("https://cargosprint.com/problems/domain-error");
+    private static final URI VALIDATION_ERROR_TYPE = URI.create("https://cargosprint.com/problems/validation-error");
+    private static final URI CIRCUIT_BREAKER_ERROR_TYPE = URI.create("https://cargosprint.com/problems/circuit-breaker");
+    private static final URI RATE_LIMIT_ERROR_TYPE = URI.create("https://cargosprint.com/problems/rate-limit");
+    private static final URI SERVER_ERROR_TYPE = URI.create("https://cargosprint.com/problems/server-error");
+
+    @ExceptionHandler(DomainErrorException.class)
+    public ResponseEntity<ProblemDetail> handleDomainError(DomainErrorException ex) {
+        log.warn("Domain error: code={}, message={}", ex.getErrorCode(), ex.getMessage());
+        
+        var problemDetail = ProblemDetail.forStatusAndDetail(ex.getHttpStatus(), ex.getMessage());
+        problemDetail.setType(DOMAIN_ERROR_TYPE);
+        problemDetail.setTitle(ex.getErrorCode());
+        problemDetail.setProperty("errorCode", ex.getErrorCode());
+        problemDetail.setProperty("timestamp", Instant.now().toString());
+        
+        return ResponseEntity.status(ex.getHttpStatus()).body(problemDetail);
+    }
+
+    @ExceptionHandler(BackendServiceException.class)
+    public ResponseEntity<ProblemDetail> handleBackendServiceException(BackendServiceException ex) {
+        log.error("Backend service error: {}", ex.toString(), ex);
+        
+        var status = ex.getStatusCode() != null
+            ? HttpStatus.valueOf(ex.getStatusCode().value())
+            : HttpStatus.SERVICE_UNAVAILABLE;
+        
+        var problemDetail = ProblemDetail.forStatusAndDetail(status, "Backend service is temporarily unavailable");
+        problemDetail.setType(BACKEND_ERROR_TYPE);
+        problemDetail.setTitle("Backend Service Error");
+        problemDetail.setProperty("service", ex.getServiceName());
+        problemDetail.setProperty("timestamp", Instant.now().toString());
+        
+        return ResponseEntity.status(status).body(problemDetail);
+    }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ProblemDetail> handleValidationException(MethodArgumentNotValidException ex) {
-        var problemDetail = ProblemDetail.forStatusAndDetail(
-            HttpStatus.BAD_REQUEST,
-            "Validation failed"
-        );
-        problemDetail.setTitle("Validation Error");
+        log.warn("Validation error: {}", ex.getMessage());
         
         var errors = ex.getBindingResult().getFieldErrors().stream()
-            .collect(Collectors.groupingBy(
+            .collect(Collectors.toMap(
                 FieldError::getField,
-                Collectors.mapping(FieldError::getDefaultMessage, Collectors.toList())
+                error -> error.getDefaultMessage() != null ? error.getDefaultMessage() : "Invalid value",
+                (existing, replacement) -> existing + "; " + replacement
             ));
         
+        var problemDetail = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Request validation failed");
+        problemDetail.setType(VALIDATION_ERROR_TYPE);
+        problemDetail.setTitle("Validation Error");
         problemDetail.setProperty("errors", errors);
+        problemDetail.setProperty("timestamp", Instant.now().toString());
         
-        return ResponseEntity.badRequest().body(problemDetail);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(problemDetail);
     }
-    
+
     @ExceptionHandler(ConstraintViolationException.class)
     public ResponseEntity<ProblemDetail> handleConstraintViolation(ConstraintViolationException ex) {
-        var problemDetail = ProblemDetail.forStatusAndDetail(
-            HttpStatus.BAD_REQUEST,
-            "Constraint violation"
-        );
-        problemDetail.setTitle("Validation Error");
+        log.warn("Constraint violation: {}", ex.getMessage());
         
         var errors = ex.getConstraintViolations().stream()
-            .collect(Collectors.groupingBy(
+            .collect(Collectors.toMap(
                 v -> v.getPropertyPath().toString(),
-                Collectors.mapping(ConstraintViolation::getMessage, Collectors.toList())
+                ConstraintViolation::getMessage,
+                (existing, replacement) -> existing + "; " + replacement
             ));
         
+        var problemDetail = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Request validation failed");
+        problemDetail.setType(VALIDATION_ERROR_TYPE);
+        problemDetail.setTitle("Validation Error");
         problemDetail.setProperty("errors", errors);
+        problemDetail.setProperty("timestamp", Instant.now().toString());
         
-        return ResponseEntity.badRequest().body(problemDetail);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(problemDetail);
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ProblemDetail> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        log.warn("Type mismatch: {}", ex.getMessage());
+        
+        var requiredType = ex.getRequiredType();
+        String errorMessage;
+        
+        if (requiredType != null && requiredType.isEnum()) {
+            var validValues = Arrays.stream(requiredType.getEnumConstants())
+                .map(Object::toString)
+                .collect(Collectors.joining(", "));
+            errorMessage = String.format(
+                "Invalid value '%s' for parameter '%s'. Valid values are: %s",
+                ex.getValue(), ex.getName(), validValues
+            );
+        } else {
+            errorMessage = String.format(
+                "Invalid value '%s' for parameter '%s'",
+                ex.getValue(), ex.getName()
+            );
+        }
+        
+        var problemDetail = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Request validation failed");
+        problemDetail.setType(VALIDATION_ERROR_TYPE);
+        problemDetail.setTitle("Validation Error");
+        problemDetail.setProperty("errors", List.of(errorMessage));
+        problemDetail.setProperty("timestamp", Instant.now().toString());
+        
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(problemDetail);
+    }
+
+    @ExceptionHandler(CallNotPermittedException.class)
+    public ResponseEntity<ProblemDetail> handleCircuitBreaker(CallNotPermittedException ex) {
+        log.error("Circuit breaker open: {}", ex.getMessage());
+        
+        var problemDetail = ProblemDetail.forStatusAndDetail(
+            HttpStatus.SERVICE_UNAVAILABLE,
+            "Service is temporarily unavailable due to high error rate"
+        );
+        problemDetail.setType(CIRCUIT_BREAKER_ERROR_TYPE);
+        problemDetail.setTitle("Service Unavailable");
+        problemDetail.setProperty("circuitBreaker", ex.getCausingCircuitBreakerName());
+        problemDetail.setProperty("timestamp", Instant.now().toString());
+        
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(problemDetail);
+    }
+
+    @ExceptionHandler(RequestNotPermitted.class)
+    public ResponseEntity<ProblemDetail> handleRateLimit(RequestNotPermitted ex) {
+        log.warn("Rate limit exceeded: {}", ex.getMessage());
+        
+        var problemDetail = ProblemDetail.forStatusAndDetail(
+            HttpStatus.TOO_MANY_REQUESTS,
+            "Rate limit exceeded, please try again later"
+        );
+        problemDetail.setType(RATE_LIMIT_ERROR_TYPE);
+        problemDetail.setTitle("Rate Limit Exceeded");
+        problemDetail.setProperty("timestamp", Instant.now().toString());
+        
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(problemDetail);
+    }
+
+    @ExceptionHandler(HttpClientErrorException.class)
+    public ResponseEntity<ProblemDetail> handleHttpClientError(HttpClientErrorException ex) {
+        var statusCode = ex.getStatusCode();
+        
+        if (statusCode.value() == 401) {
+            log.warn("Backend authentication failed (401)");
+            var problemDetail = ProblemDetail.forStatusAndDetail(
+                HttpStatus.UNAUTHORIZED, "Authentication failed - token may be invalid or expired");
+            problemDetail.setTitle("Unauthorized");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(problemDetail);
+        }
+        
+        if (statusCode.value() == 403) {
+            log.warn("Backend authorization failed (403)");
+            var problemDetail = ProblemDetail.forStatusAndDetail(
+                HttpStatus.FORBIDDEN, "Access denied - insufficient permissions");
+            problemDetail.setTitle("Forbidden");
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(problemDetail);
+        }
+        
+        log.warn("HTTP client error: {}", statusCode);
+        var problemDetail = ProblemDetail.forStatusAndDetail(
+            HttpStatus.valueOf(statusCode.value()), "Backend request failed");
+        problemDetail.setType(BACKEND_ERROR_TYPE);
+        return ResponseEntity.status(statusCode).body(problemDetail);
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ProblemDetail> handleUnexpectedException(Exception ex, HttpServletRequest request) {
+    public ResponseEntity<ProblemDetail> handleGenericException(Exception ex) {
+        // Log full exception at ERROR level, don't expose details to client
         log.error("Unhandled exception occurred", ex);
         
         var problemDetail = ProblemDetail.forStatusAndDetail(
             HttpStatus.INTERNAL_SERVER_ERROR,
-            "An unexpected error occurred. Please try again later."
+            "An unexpected error occurred"
         );
+        problemDetail.setType(SERVER_ERROR_TYPE);
         problemDetail.setTitle("Internal Server Error");
-        problemDetail.setInstance(URI.create(request.getRequestURI()));
+        problemDetail.setProperty("timestamp", Instant.now().toString());
         
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(problemDetail);
     }
 }
 ```
 
-## Controller Error Mapping
+## ProblemDetail Response Format (RFC 7807)
 
-```java
-@GetMapping("/{id}")
-public ResponseEntity<UserDto> getById(@PathVariable UUID id) {
-    var result = getUserQuery.execute(id);
-    
-    return result.match(
-        success -> ResponseEntity.ok(success),
-        error -> switch (error.code()) {
-            case "User.NotFound" -> ResponseEntity.notFound().build();
-            default -> ResponseEntity.badRequest()
-                .body(toProblemDetail(error, HttpStatus.BAD_REQUEST));
-        }
-    );
-}
-
-private ProblemDetail toProblemDetail(Error error, HttpStatus status) {
-    var problemDetail = ProblemDetail.forStatusAndDetail(status, error.message());
-    problemDetail.setTitle(error.code());
-    return problemDetail;
-}
-```
-
-## Custom Exceptions
-
-```java
-// Domain exception for business rule violations
-public class DomainException extends RuntimeException {
-    private final Error error;
-    
-    public DomainException(Error error) {
-        super(error.message());
-        this.error = error;
-    }
-    
-    public Error getError() { return error; }
-}
-
-// Handler for domain exceptions
-@ExceptionHandler(DomainException.class)
-public ResponseEntity<ProblemDetail> handleDomainException(DomainException ex) {
-    var error = ex.getError();
-    var problemDetail = ProblemDetail.forStatusAndDetail(
-        HttpStatus.BAD_REQUEST,
-        error.message()
-    );
-    problemDetail.setTitle(error.code());
-    
-    return ResponseEntity.badRequest().body(problemDetail);
+```json
+{
+    "type": "https://cargosprint.com/problems/domain-error",
+    "title": "Container.NotFound",
+    "status": 404,
+    "detail": "Container not found",
+    "instance": "/api/bff/containers/search/EMODAL",
+    "errorCode": "Container.NotFound",
+    "timestamp": "2025-01-08T10:30:00Z"
 }
 ```
 
 ## Conventions
 
 - NEVER expose stack traces or internal details in production
-- Use `ProblemDetail` (RFC 7807) for all error responses
+- Use `ProblemDetail` (RFC 7807) for ALL error responses
 - Log exceptions with correlation IDs (see `logging.mdc`)
-- Handle specific exceptions, not generic `Exception`
-- Domain errors are NOT exceptions — use Result pattern
+- Handle specific exceptions first, generic `Exception` last
+- Domain errors use Result pattern â€” NOT exceptions
+- Use `DomainErrorException` to bridge Result failures to HTTP
 - Use `@RestControllerAdvice` for global exception handling
+- Include timestamp in all error responses
+- Include error code for programmatic handling
 
-**See also:** `logging.mdc`, `cqrs.mdc`
+**See also:** `logging.mdc`, `cqrs.mdc`, `resilience.mdc`

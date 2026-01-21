@@ -1,17 +1,20 @@
----
-description: "CQRS pattern for Spring Boot - commands, queries, handlers, events"
+﻿---
+description: "CQRS pattern for Spring Boot BFF - commands, queries, handlers, dispatcher (no database transactions)"
 globs: ["**/*Command*.java", "**/*Query*.java", "**/*Handler*.java", "**/*Event*.java"]
 ---
 
-# CQRS Pattern for Spring Boot
+# CQRS Pattern for Spring Boot BFF
 
-## Core Interfaces
+> **Note:** This BFF project orchestrates HTTP calls to backend services and does NOT use database transactions.
+> Therefore, `@Transactional` annotations are NOT used in handlers.
+
+## Core Interfaces (Located in `application/cqrs/`)
 
 ```java
-// Marker interface for commands
+// Marker interface for commands (write operations)
 public interface Command<T> {}
 
-// Marker interface for queries
+// Marker interface for queries (read operations)
 public interface Query<T> {}
 
 // Command handler
@@ -23,94 +26,17 @@ public interface CommandHandler<C extends Command<T>, T> {
 public interface QueryHandler<Q extends Query<T>, T> {
     T handle(Q query);
 }
-```
 
-## Command Pattern
-
-```java
-// Command (using record)
-public record CreateUserCommand(
-    String email,
-    String name
-) implements Command<Result<UUID>> {}
-
-// Handler
-@Service
-@Transactional
-public class CreateUserCommandHandler implements CommandHandler<CreateUserCommand, Result<UUID>> {
-    
-    private final UserRepository userRepository;
-    private final ApplicationEventPublisher eventPublisher;
-    
-    public CreateUserCommandHandler(
-            UserRepository userRepository,
-            ApplicationEventPublisher eventPublisher) {
-        this.userRepository = userRepository;
-        this.eventPublisher = eventPublisher;
-    }
-    
-    @Override
-    public Result<UUID> handle(CreateUserCommand command) {
-        // Check business rules
-        if (userRepository.existsByEmail(command.email())) {
-            return Result.failure(UserErrors.EMAIL_ALREADY_EXISTS);
-        }
-        
-        // Create entity
-        var user = new User();
-        user.setEmail(command.email());
-        user.setName(command.name());
-        
-        // Persist
-        var saved = userRepository.save(user);
-        
-        // Publish domain event
-        eventPublisher.publishEvent(new UserCreatedEvent(
-            saved.getId(),
-            saved.getEmail(),
-            LocalDateTime.now()
-        ));
-        
-        return Result.success(saved.getId());
-    }
-}
-```
-
-## Query Pattern
-
-```java
-// Query
-public record GetUserQuery(UUID id) implements Query<Result<UserDto>> {}
-
-// Handler
-@Service
-@Transactional(readOnly = true)
-public class GetUserQueryHandler implements QueryHandler<GetUserQuery, Result<UserDto>> {
-    
-    private final UserRepository userRepository;
-    
-    public GetUserQueryHandler(UserRepository userRepository) {
-        this.userRepository = userRepository;
-    }
-    
-    @Override
-    public Result<UserDto> handle(GetUserQuery query) {
-        return userRepository.findById(query.id())
-            .map(user -> new UserDto(user.getId(), user.getEmail(), user.getName()))
-            .map(Result::<UserDto>success)
-            .orElse(Result.failure(UserErrors.NOT_FOUND));
-    }
-}
-```
-
-## Dispatcher (Simple Mediator)
-
-```java
+// Dispatcher interface
 public interface Dispatcher {
     <T> T dispatch(Command<T> command);
     <T> T dispatch(Query<T> query);
 }
+```
 
+## SimpleDispatcher Implementation
+
+```java
 @Service
 public class SimpleDispatcher implements Dispatcher {
     
@@ -137,21 +63,10 @@ public class SimpleDispatcher implements Dispatcher {
     }
     
     private Class<?> getHandlerType(Class<?> handlerInterface, Class<?> messageType) {
+        // Finds handler bean by matching generic type parameter
         return context.getBeansOfType(handlerInterface).values().stream()
             .map(Object::getClass)
-            .filter(type -> {
-                var genericInterface = Arrays.stream(type.getGenericInterfaces())
-                    .filter(i -> i instanceof ParameterizedType)
-                    .map(i -> (ParameterizedType) i)
-                    .filter(i -> handlerInterface.isAssignableFrom((Class<?>) i.getRawType()))
-                    .findFirst()
-                    .orElse(null);
-                    
-                if (genericInterface == null) return false;
-                
-                var messageClass = (Class<?>) genericInterface.getActualTypeArguments()[0];
-                return messageClass.equals(messageType);
-            })
+            .filter(type -> matchesMessageType(type, handlerInterface, messageType))
             .findFirst()
             .orElseThrow(() -> new IllegalStateException(
                 "No handler found for " + messageType.getSimpleName()));
@@ -159,199 +74,227 @@ public class SimpleDispatcher implements Dispatcher {
 }
 ```
 
-## Controller Integration
+## Query Pattern
+
+```java
+// Query record (in application/features/{feature}/{flow}/)
+public record SearchContainersQuery(
+    ExternalApiProvider backend,
+    String containerNumber,
+    TradeType tradeType
+) implements Query<Result<List<ContainerSearchResult>>> {
+    
+    public static SearchContainersQuery fromCode(
+            ExternalApiProvider backend, 
+            String containerNumber, 
+            String tradeTypeCode) {
+        return new SearchContainersQuery(
+            backend,
+            containerNumber,
+            TradeType.fromCodeOrDefault(tradeTypeCode)
+        );
+    }
+}
+
+// Query handler
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class SearchContainersQueryHandler 
+        implements QueryHandler<SearchContainersQuery, Result<List<ContainerSearchResult>>> {
+    
+    private final Map<ExternalApiProvider, ContainerSearchStrategy> strategies;
+    
+    @Override
+    public Result<List<ContainerSearchResult>> handle(SearchContainersQuery query) {
+        var strategy = strategies.get(query.backend());
+        
+        if (strategy == null) {
+            return Result.failure(DomainErrors.UNSUPPORTED_BACKEND);
+        }
+        
+        log.debug("Executing container search: backend={}, container={}", 
+            query.backend(), query.containerNumber());
+        
+        return strategy.search(query.containerNumber(), query.tradeType());
+    }
+}
+```
+
+## Command Pattern
+
+```java
+// Command record
+public record RefreshTokenCommand(
+    String refreshToken
+) implements Command<Result<TokenResult>> {}
+
+// Command handler - orchestrates HTTP calls to backend
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class RefreshTokenCommandHandler 
+        implements CommandHandler<RefreshTokenCommand, Result<TokenResult>> {
+    
+    private final KeycloakAuthPort keycloakAuthPort;
+    
+    @Override
+    public Result<TokenResult> handle(RefreshTokenCommand command) {
+        log.debug("Refreshing token");
+        
+        return keycloakAuthPort.refreshToken(command.refreshToken());
+    }
+}
+```
+
+## Result Pattern Integration
+
+All handlers MUST return `Result<T>` types:
+
+```java
+// Success case
+return Result.success(new TokenResult(accessToken, refreshToken, expiresIn));
+
+// Failure case  
+return Result.failure(DomainErrors.TOKEN_REFRESH_FAILED);
+
+// From error code and message
+return Result.failure("Backend.Unavailable", "Backend service is unavailable");
+```
+
+## Controller Integration (Mandatory Pattern)
 
 ```java
 @RestController
-@RequestMapping("/api/users")
-public class UserController {
+@RequestMapping("/api/bff/containers")
+@RequiredArgsConstructor
+public class ContainerSearchController {
     
+    // ONLY dependency is Dispatcher - enforced by ArchUnit
     private final Dispatcher dispatcher;
     
-    public UserController(Dispatcher dispatcher) {
-        this.dispatcher = dispatcher;
+    @GetMapping("/search/{backend}")
+    public ResponseEntity<ContainerSearchResponse> search(
+            @PathVariable ExternalApiProvider backend,
+            @RequestParam("q") @ValidContainerNumber String rawContainerNumber,
+            @RequestParam(value = "tradeType", defaultValue = "I") String tradeTypeCode) {
+        
+        // 1. Sanitize input
+        var containerNumber = InputSanitizer.sanitizeContainerNumber(rawContainerNumber);
+        
+        // 2. Create query
+        var query = SearchContainersQuery.fromCode(backend, containerNumber, tradeTypeCode);
+        
+        // 3. Dispatch and handle result
+        var results = dispatcher.dispatch(query)
+            .getOrThrow(error -> new DomainErrorException(error, mapErrorToHttpStatus(error)));
+        
+        // 4. Map to response DTO
+        return ResponseEntity.ok(ContainerSearchResponse.fromApplication(results));
     }
     
-    @PostMapping
-    public ResponseEntity<UserDto> create(@Valid @RequestBody CreateUserRequest request) {
-        var command = new CreateUserCommand(request.email(), request.name());
-        var result = dispatcher.dispatch(command);
-        
-        return result.match(
-            id -> {
-                var query = new GetUserQuery(id);
-                var userResult = dispatcher.dispatch(query);
-                return userResult.match(
-                    user -> ResponseEntity
-                        .created(URI.create("/api/users/" + id))
-                        .body(user),
-                    error -> ResponseEntity.badRequest().build()
-                );
-            },
-            error -> ResponseEntity.badRequest().build()
-        );
-    }
-    
-    @GetMapping("/{id}")
-    public ResponseEntity<UserDto> getById(@PathVariable UUID id) {
-        var query = new GetUserQuery(id);
-        var result = dispatcher.dispatch(query);
-        
-        return result.match(
-            ResponseEntity::ok,
-            error -> ResponseEntity.notFound().build()
-        );
+    private HttpStatus mapErrorToHttpStatus(Error error) {
+        return switch (error.code()) {
+            case "Backend.Unsupported" -> HttpStatus.BAD_REQUEST;
+            case "Container.NotFound" -> HttpStatus.NOT_FOUND;
+            case "Backend.ServiceUnavailable" -> HttpStatus.SERVICE_UNAVAILABLE;
+            default -> HttpStatus.INTERNAL_SERVER_ERROR;
+        };
     }
 }
 ```
 
-## Domain Events
+## Controller Constraints (MANDATORY - Enforced by ArchUnit)
+
+### What Controllers CAN Do
+
+- Inject `Dispatcher` as the ONLY application layer dependency
+- Create Command/Query records from request DTOs
+- Call `dispatcher.dispatch(command)` or `dispatcher.dispatch(query)`
+- Map application results to web response DTOs
+- Handle HTTP-specific concerns (request parsing, response building, status codes)
+- Sanitize input using `InputSanitizer`
+
+### What Controllers CANNOT Do
+
+| Violation | Why It's Wrong |
+|-----------|---------------|
+| Inject `*Handler` directly | Bypasses dispatcher, couples controller to specific handlers |
+| Inject `*Port` interfaces | Business logic belongs in handlers, not controllers |
+| Inject `*Client` (HTTP clients) | HTTP calls to backends belong in handlers or adapters |
+| Inject `RestClient` | Same as above - no direct HTTP client usage |
+| Contain business logic | Controllers are thin - dispatch and transform only |
+
+### ArchUnit Enforcement
+
+These constraints are enforced at build time by `CleanArchitectureTest.java`:
 
 ```java
-// Event (past tense)
-public record UserCreatedEvent(
-    UUID userId,
-    String email,
-    LocalDateTime createdAt
-) {}
+@ArchTest
+static final ArchRule controllers_should_not_depend_on_query_handlers = noClasses()
+    .that().resideInAPackage("..web.controller..")
+    .and().haveSimpleNameEndingWith("Controller")
+    .should().dependOnClassesThat().haveSimpleNameEndingWith("QueryHandler");
 
-// Event listener
-@Component
-public class UserEventListener {
-    
-    private static final Logger log = LoggerFactory.getLogger(UserEventListener.class);
-    
-    @EventListener
-    @Async
-    public void onUserCreated(UserCreatedEvent event) {
-        log.info("User created: userId={}, email={}", event.userId(), event.email());
-        
-        // Send welcome email, create profile, etc.
-    }
-}
+@ArchTest
+static final ArchRule controllers_should_not_depend_on_command_handlers = noClasses()
+    .that().resideInAPackage("..web.controller..")
+    .and().haveSimpleNameEndingWith("Controller")
+    .should().dependOnClassesThat().haveSimpleNameEndingWith("CommandHandler");
 
-// Enable async event processing
-@Configuration
-@EnableAsync
-public class AsyncConfig {
-    
-    @Bean
-    public Executor taskExecutor() {
-        var executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(2);
-        executor.setMaxPoolSize(5);
-        executor.setQueueCapacity(100);
-        executor.setThreadNamePrefix("async-event-");
-        executor.initialize();
-        return executor;
-    }
-}
+@ArchTest
+static final ArchRule controllers_should_not_depend_on_application_ports = noClasses()
+    .that().resideInAPackage("..web.controller..")
+    .and().haveSimpleNameEndingWith("Controller")
+    .should().dependOnClassesThat().haveSimpleNameEndingWith("Port");
 ```
 
-## Transaction Events
+## Feature Organization Rules
 
-```java
-@Component
-public class UserEventListener {
-    
-    // Execute after successful commit
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    public void onUserCreatedAfterCommit(UserCreatedEvent event) {
-        // This runs only if transaction commits successfully
-        // Safe to call external services here
-    }
-    
-    // Execute before commit
-    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
-    public void onUserCreatedBeforeCommit(UserCreatedEvent event) {
-        // Still within transaction
-        // Can still roll back if needed
-    }
-    
-    // Execute after rollback
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_ROLLBACK)
-    public void onUserCreatedAfterRollback(UserCreatedEvent event) {
-        // Compensation logic
-    }
-}
+Feature DTOs MUST be organized into flow-based sub-packages:
+
+```
+application/features/
+â”œâ”€â”€ auth/
+â”‚   â”œâ”€â”€ token/
+â”‚   â”‚   â”œâ”€â”€ ExchangeAuthCodeCommand.java
+â”‚   â”‚   â”œâ”€â”€ ExchangeAuthCodeCommandHandler.java
+â”‚   â”‚   â”œâ”€â”€ RefreshTokenCommand.java
+â”‚   â”‚   â”œâ”€â”€ RefreshTokenCommandHandler.java
+â”‚   â”‚   â””â”€â”€ TokenResult.java
+â”‚   â”œâ”€â”€ authorization/
+â”‚   â”‚   â”œâ”€â”€ GetAuthorizationUrlQuery.java
+â”‚   â”‚   â”œâ”€â”€ GetAuthorizationUrlQueryHandler.java
+â”‚   â”‚   â””â”€â”€ AuthorizationUrlResult.java
+â”‚   â””â”€â”€ common/
+â”‚       â””â”€â”€ KeycloakAuthPort.java      # Shared port interface
+â””â”€â”€ containersearch/
+    â”œâ”€â”€ single/
+    â”‚   â”œâ”€â”€ SearchContainersQuery.java
+    â”‚   â””â”€â”€ SearchContainersQueryHandler.java
+    â”œâ”€â”€ bulk/
+    â”‚   â”œâ”€â”€ BulkSearchContainersQuery.java
+    â”‚   â”œâ”€â”€ BulkSearchContainersQueryHandler.java
+    â”‚   â””â”€â”€ BulkContainerSearchResult.java
+    â””â”€â”€ common/
+        â”œâ”€â”€ ContainerSearchStrategy.java  # Strategy interface
+        â””â”€â”€ ContainerSearchResult.java    # Shared result DTO
 ```
 
-## Validation Pipeline
-
-```java
-// Validator interface
-public interface CommandValidator<C extends Command<?>> {
-    void validate(C command);
-}
-
-// Implementation
-@Component
-public class CreateUserCommandValidator implements CommandValidator<CreateUserCommand> {
-    
-    @Override
-    public void validate(CreateUserCommand command) {
-        var violations = new ArrayList<String>();
-        
-        if (command.email() == null || command.email().isBlank()) {
-            violations.add("Email is required");
-        }
-        
-        if (command.name() == null || command.name().isBlank()) {
-            violations.add("Name is required");
-        }
-        
-        if (!violations.isEmpty()) {
-            throw new ValidationException(String.join(", ", violations));
-        }
-    }
-}
-
-// Enhanced dispatcher with validation
-@Service
-public class ValidatingDispatcher implements Dispatcher {
-    
-    private final ApplicationContext context;
-    
-    public ValidatingDispatcher(ApplicationContext context) {
-        this.context = context;
-    }
-    
-    @Override
-    public <T> T dispatch(Command<T> command) {
-        // Validate before handling
-        validateCommand(command);
-        
-        var handlerType = getHandlerType(CommandHandler.class, command.getClass());
-        var handler = (CommandHandler<Command<T>, T>) context.getBean(handlerType);
-        return handler.handle(command);
-    }
-    
-    private void validateCommand(Command<?> command) {
-        var validators = context.getBeansOfType(CommandValidator.class).values();
-        validators.stream()
-            .filter(v -> supportsCommand(v, command))
-            .forEach(v -> ((CommandValidator) v).validate(command));
-    }
-    
-    private boolean supportsCommand(CommandValidator<?> validator, Command<?> command) {
-        var validatorType = validator.getClass().getGenericInterfaces();
-        // Implementation to check if validator supports command type
-        return true; // Simplified
-    }
-    
-    // ... query dispatch and helper methods
-}
-```
+**Rules:**
+- Classes MUST be in flow-based sub-packages (e.g., `auth.token`, NOT directly in `auth`)
+- Port interfaces MUST be in `common/` sub-packages
+- Features MUST NOT depend on each other
+- All records MUST be top-level classes (not nested)
 
 ## Conventions
 
-- Commands MUST return `Result<T>` (with value) or `Result` (without value)
+- Commands MUST return `Result<T>` (with value) or `Result<Void>` (without value)
 - Queries MUST return `Result<T>` with DTOs
-- Use records for commands, queries, and events
+- Use records for commands, queries, and results
 - ONE handler per command/query
 - Handlers are Spring `@Service` components
-- Commands use `@Transactional`, queries use `@Transactional(readOnly = true)`
-- Events use past tense naming (`UserCreated`, not `CreateUser`)
-- Use `@TransactionalEventListener` for events that need transaction awareness
+- **NO `@Transactional` annotations** - this BFF orchestrates HTTP calls, not database operations
+- **Controllers MUST only depend on `Dispatcher`** - enforced by ArchUnit
 
-**See also:** `error-handling.mdc`, `jpa.mdc`, `spring-cloud-stream.mdc`
+**See also:** `bff-architecture.mdc`, `error-handling.mdc`, `http-clients.mdc`

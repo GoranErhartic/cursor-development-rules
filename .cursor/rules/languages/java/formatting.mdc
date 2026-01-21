@@ -1,0 +1,221 @@
+---
+description: "Code formatting conventions - parameter alignment, line breaking, annotation formatting"
+globs: ["**/*.java"]
+---
+
+# Code Formatting Conventions
+
+## Parameter Alignment Rules
+
+### General Principle
+
+**When a method, constructor, or annotation has more than 2 parameters, place each parameter on its own line. For short parameter lists (1-2 params) that fit within the line width (120 chars), keep them on the same line.**
+
+### Key Rules
+
+1. **Every closing bracket on its own line** - When an annotation/method is wrapped, the closing `)` goes on a new line
+2. **Each annotation on its own line** - Multiple annotations on a parameter/field are each on separate lines
+3. **Field/variable on its own line** - After annotations, the field declaration goes on a new line
+
+### Annotations with Multiple Parameters
+
+When an annotation has more than 2 parameters, wrap with each on its own line:
+
+```java
+// GOOD - Each param and closing bracket on own line
+@Schema(
+		description = "ISO 6346 container number (4 uppercase letters + 7 digits)",
+		example = "MSCU1234567",
+		pattern = "^[A-Z]{4}[0-9]{7}$",
+		minLength = 11,
+		maxLength = 11,
+		requiredMode = Schema.RequiredMode.REQUIRED
+)
+@NotBlank(message = "Container number is required")
+@Size(min = 11, max = 11, message = "Container number must be exactly 11 characters")
+@Pattern(
+		regexp = "^[A-Z]{4}[0-9]{7}$",
+		message = "Container number must be in ISO 6346 format (4 letters + 7 digits)"
+)
+String containerNumber;  // Field on its own line
+
+// GOOD - Short annotation (fits on one line)
+@Size(min = 11, max = 11)
+@NotBlank(message = "Required")
+String value;
+```
+
+### Multiple Annotations on Parameters
+
+Each annotation must be on its own line:
+
+```java
+// GOOD - Each annotation on separate line, field at the end
+@Schema(description = "Container number", example = "MSCU1234567")
+@NotBlank(message = "Required")
+@Size(min = 11, max = 11)
+String containerNumber;
+
+// BAD - Annotations chained on same line
+@Schema(...) @NotBlank(...) @Size(...) String containerNumber;
+```
+
+### Method Invocations
+
+When a method call has more than 2 arguments, wrap each on its own line with closing paren on its own line:
+
+```java
+// GOOD - Each argument on its own line, closing paren on new line
+var response = new ContainerSummaryResponse(
+		summary.containerId(),
+		summary.containerNumber(),
+		summary.containerStatus(),
+		summary.terminalCode()
+);
+
+// GOOD - 2 or fewer arguments: same line
+var result = someMethod(firstArgument, secondArgument);
+```
+
+### Record Components
+
+Records wrap each component on its own line when they have annotations:
+
+```java
+// GOOD - Each annotation and field on its own line
+public record ContainerLookupRequest(
+		@Schema(
+				description = "Container number",
+				example = "MSCU1234567"
+		)
+		@NotBlank
+		String containerNumber,
+
+		@Schema(description = "Terminal code", nullable = true)
+		String terminalCode
+) {}
+
+// GOOD - Simple record with few short components
+public record Point(int x, int y) {}
+```
+
+### Method/Constructor Parameters
+
+Method declarations wrap parameters when more than 2 or exceeding line width:
+
+```java
+// GOOD - More than 2 parameters: each on its own line
+public void processContainer(
+		String containerNumber,
+		String terminalCode,
+		LocalDateTime timestamp
+) {
+	// implementation
+}
+
+// GOOD - 2 or fewer parameters: same line
+public void processContainer(String containerNumber, String terminalCode) {
+	// implementation
+}
+```
+
+### Array Initializers in Annotations
+
+When annotations use array initializers (e.g., `@ApiResponses`), each element goes on its own line:
+
+```java
+// GOOD - Each element on its own line with braces on separate lines
+@ApiResponses(
+		{
+				@ApiResponse(responseCode = "200", description = "Success"),
+				@ApiResponse(responseCode = "400", description = "Bad request"),
+				@ApiResponse(responseCode = "503", description = "Service unavailable")
+		}
+)
+public ResponseEntity<?> lookup() { ... }
+
+// BAD - Elements inline after opening brace
+@ApiResponses(
+	{@ApiResponse(...), @ApiResponse(...)}
+)
+```
+
+### Builder/Fluent API Chains
+
+Each method call in a fluent chain should be on its own line:
+
+```java
+// GOOD
+var client = RestClient.builder()
+		.baseUrl("https://api.example.com")
+		.defaultHeader("Accept", "application/json")
+		.connectTimeout(Duration.ofSeconds(10))
+		.build();
+```
+
+## Spotless Enforcement
+
+These rules are enforced by the Spotless Maven plugin with Eclipse formatter configuration.
+
+### Eclipse Formatter Settings
+
+The following settings in `eclipse-formatter.xml` enforce these conventions:
+
+| Setting | Value | Description |
+|---------|-------|-------------|
+| `alignment_for_arguments_in_annotation` | `80` | Force wrap annotation arguments one per line |
+| `alignment_for_arguments_in_method_invocation` | `80` | Force wrap method arguments one per line |
+| `alignment_for_annotations_on_parameter` | `49` | Wrap each annotation on parameter to new line |
+| `alignment_for_record_components` | `81` | Force one per line for record components |
+| `parentheses_positions_in_annotation` | `separate_lines_if_wrapped` | Put parens on separate lines when wrapped |
+| `parentheses_positions_in_method_invocation` | `separate_lines_if_wrapped` | Put parens on separate lines when wrapped |
+| `insert_new_line_after_annotation_on_parameter` | `insert` | New line after annotations before field |
+| `alignment_for_expressions_in_array_initializer` | `80` | Force wrap array elements one per line |
+| `insert_new_line_after_opening_brace_in_array_initializer` | `insert` | New line after `{` in arrays |
+| `insert_new_line_before_closing_brace_in_array_initializer` | `insert` | New line before `}` in arrays |
+| `lineSplit` | `120` | Maximum line width before wrapping |
+
+**Alignment values:**
+- `16` = wrap one per line when line exceeds width
+- `49` = wrap all except first + wrap one per line + wrap (32 + 16 + 1)
+- `80` = force split + wrap one per line (64 + 16)
+- `81` = force split + wrap one per line + wrap (64 + 16 + 1)
+
+### Running Spotless
+
+```bash
+# Check formatting (fails if not compliant)
+mvn spotless:check
+
+# Apply formatting automatically
+mvn spotless:apply
+```
+
+## Continuation Indentation
+
+When parameters wrap, they use **continuation indentation** (2 tabs by default):
+
+```java
+@Schema(
+		description = "Container number",
+		example = "MSCU1234567",
+		pattern = "^[A-Z]{4}[0-9]{7}$"
+)
+String containerNumber;
+```
+
+## Exception: Short Annotations
+
+Single-element annotations or annotations with 1-2 short parameters that fit within line width remain on one line:
+
+```java
+// GOOD - Short annotations stay on one line
+@NotBlank
+@Size(max = 100)
+@Override
+@Deprecated(since = "2.0")
+@Schema(description = "User ID")
+@Size(min = 11, max = 11, message = "Must be 11 chars")
+```
+
+**See also:** `code-quality.mdc`

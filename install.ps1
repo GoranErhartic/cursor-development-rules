@@ -106,7 +106,7 @@ Copy-Item -Path $SourceRulesDir -Destination $TargetRulesDir -Recurse
 
 # Success message
 Write-Host ""
-Write-Host "✓ Installation complete!" -ForegroundColor Green
+Write-Host "Installation complete!" -ForegroundColor Green
 Write-Host ""
 Write-Host "Rules installed to: $TargetRulesDir"
 if ($BackupName) {
