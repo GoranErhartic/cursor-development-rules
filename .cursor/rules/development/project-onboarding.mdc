@@ -1,0 +1,82 @@
+---
+description: "Project onboarding procedure - analyze repo to detect stacks, map directories to routers, extract dependencies; generate project-context.mdc for rule discovery. Request when onboarding a new project or when project-context.mdc is missing or stale."
+---
+
+# Project Onboarding
+
+Run this procedure when:
+- The user asks to "onboard" to the project or "analyze" the project for rules
+- `project-context.mdc` is missing, empty, or contains only placeholders
+- The project structure has changed significantly and routing may be stale
+
+**Output:** Regenerate or create `project-context.mdc` with accurate project metadata so the agent can load the right stack routers without inferring from open files.
+
+## Procedure
+
+### 1. Scan for dependency manifests and configs
+
+Search the repository (from workspace root) for:
+
+| File pattern | Indicates |
+|--------------|-----------|
+| `package.json` | Node.js / TypeScript; check for React, Lambda, CDK deps |
+| `tsconfig.json` | TypeScript usage; path hints for app vs lib |
+| `cdk.json`, `**/cdk/**`, `**/functions/**`, `**/*.handler.ts` | AWS Lambda + CDK stack |
+| `**/*.tsx`, `vite.config.*`, `next.config.*` | React frontend stack |
+| `pom.xml`, `build.gradle*` | Java stack |
+| `*.csproj`, `*.sln` | C# / .NET stack |
+
+Use these to infer which of the five routers apply: `languages/aws-lambda/nodejs-lambda.mdc`, `languages/nodejs/nodejs-base.mdc`, `languages/java/java-spring.mdc`, `languages/csharp/csharp-dotnet.mdc`, `languages/react/react-frontend.mdc`.
+
+### 2. Map directories to stacks
+
+For each detected stack, identify the directory or path pattern that contains that stack:
+
+- **AWS Lambda / Node.js:** Paths matching router globs: `**/functions/**`, `**/lambda/**`, `**/handlers/**`, `**/*.handler.ts`, `**/cdk/**`
+- **Node.js / TypeScript (base):** Directories with `package.json` + `.ts` but excluding Lambda/CDK/React paths
+- **React:** Directories with `.tsx`, Vite/Next configs
+- **Java / Spring:** Directories with `pom.xml` or `build.gradle`
+- **C# / .NET:** Directories with `*.csproj`
+
+List each relevant directory (e.g. `packages/api`, `apps/web`, `backend`) and the router file it maps to.
+
+### 3. Detect project type
+
+- **Monorepo:** Multiple packages/apps (e.g. multiple `package.json`, or workspace root with packages/)
+- **Monolith:** Single application root
+- **Microservices:** Multiple deployable services in separate roots
+
+### 4. Extract key dependencies
+
+From `package.json`, `pom.xml`, `build.gradle`, or `*.csproj` as relevant:
+- Runtime/framework (e.g. Node 22, React 18, Spring Boot 3)
+- Key libraries (e.g. TanStack Query, Middy, Powertools)
+- Build tools (pnpm, esbuild, Vite)
+
+Keep the list short (one line per stack or a small table).
+
+### 5. Brief architecture notes
+
+One or two sentences: serverless vs traditional, API style (REST/GraphQL), main data stores, event/message usage if any.
+
+### 6. Write project-context.mdc
+
+Create or overwrite `project-context.mdc` with:
+
+- Frontmatter: `description` (short), `alwaysApply: true`
+- **Project:** Name (from repo or package name), Type (monorepo/monolith/microservices)
+- **Active Stacks:** Table: directory or path pattern → router file path (e.g. `languages/aws-lambda/nodejs-lambda.mdc`)
+- **Key Dependencies:** Short table by stack/area
+- **Architecture Notes:** 1–2 sentences
+
+Keep the file under ~40 lines. Use the structure in the existing `project-context.mdc` template; replace placeholders with real values. If a section has no data, omit it or write "None" so the file is still valid.
+
+### 7. Confirm
+
+After writing the file, tell the user that onboarding is complete and that `project-context.mdc` will be loaded in every conversation so the agent can route to the correct stack rules.
+
+## See also
+
+- `rule-index.mdc` — full list of routers and requestable rules
+- `project-context.mdc` — the file this procedure generates
+- `retrospective.mdc` — can flag when project-context is stale after large refactors

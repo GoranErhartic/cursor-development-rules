@@ -1,0 +1,66 @@
+---
+description: "Node.js + TypeScript base guide - technology stack, rule routing, key conventions (Express, Fastify, NestJS, Hono)"
+globs: ["**/*.ts", "**/*.mts", "**/tsconfig.json", "**/package.json", "!**/functions/**", "!**/lambda/**", "!**/handlers/**", "!**/*.handler.ts", "!**/cdk/**", "!**/*.tsx"]
+---
+
+# Node.js + TypeScript Base Development Guide
+
+## Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Runtime | Node.js (LTS) |
+| Language | TypeScript |
+| Frameworks | Express, Fastify, NestJS, Hono |
+| Validation | Zod |
+| Data | Prisma, Drizzle, TypeORM |
+| Logging | Pino, Winston |
+| Testing | Vitest, Supertest, Testcontainers |
+| Package Manager | pnpm preferred |
+
+## Rule Routing
+
+Consult these rules based on what you are working on:
+
+## Quick Reference
+
+- Add/modify API endpoint: `languages/nodejs/controllers.mdc`, `languages/nodejs/validation.mdc`, `languages/nodejs/error-handling.mdc`
+- Add persistence logic: `languages/nodejs/orm.mdc`, `languages/nodejs/testing.mdc`
+- Improve reliability: `languages/nodejs/resilience.mdc`, `languages/nodejs/logging.mdc`, `languages/nodejs/security.mdc`
+- Integrate third-party calls: `languages/nodejs/http-clients.mdc`, `languages/nodejs/error-handling.mdc`
+
+### API & Controllers
+- Controller patterns (Express, Fastify, NestJS, Hono) → `languages/nodejs/controllers.mdc`
+- Request validation (Zod schemas, type inference) → `languages/nodejs/validation.mdc`
+- Input sanitization (XSS, SQL injection, path traversal) → `languages/nodejs/input-sanitization.mdc`
+
+### Data & Persistence
+- ORM patterns (Prisma, Drizzle, TypeORM, migrations) → `languages/nodejs/orm.mdc`
+
+### Cross-Cutting
+- Code quality (ESLint, Prettier, TypeScript, naming) → `languages/nodejs/code-quality.mdc`
+- Error handling (Result pattern, middleware, ProblemDetail RFC 7807) → `languages/nodejs/error-handling.mdc`
+- Logging (Pino, Winston, correlation IDs) → `languages/nodejs/logging.mdc`
+- Security (Helmet, CORS, rate limiting, OWASP) → `languages/nodejs/security.mdc`
+- Auth (JWT, Passport, RBAC) → `languages/nodejs/auth.mdc`
+- HTTP clients (fetch, axios, undici, resilience) → `languages/nodejs/http-clients.mdc`
+- Resilience (retry, circuit breaker, timeout, bulkhead) → `languages/nodejs/resilience.mdc`
+- Messaging (BullMQ, job queues, event-driven) → `languages/nodejs/messaging.mdc`
+- Testing (Vitest, Supertest, Testcontainers, mocking) → `languages/nodejs/testing.mdc`
+- Dependencies (package.json, security, licensing) → `languages/nodejs/dependencies.mdc`
+
+### Architecture Patterns (request when needed)
+- Clean Architecture, CQRS, DDD → `patterns/architecture.mdc`
+- Clean code principles → `patterns/clean-code.mdc`
+- CQRS details → `patterns/cqrs.mdc`
+- API design conventions → `patterns/api-design.mdc`
+
+## Key Conventions
+
+- **Error handling:** Result pattern for domain errors; middleware for API errors; RFC 7807 ProblemDetails
+- **Validation:** Zod at API boundaries; type inference from schemas
+- **Testing:** TDD; Vitest; Supertest for HTTP; Testcontainers for integration
+- **Logging:** Structured JSON; correlation IDs on every request
+- **Dependencies:** pnpm; only MIT/Apache-2.0/BSD/ISC where possible
+
+**Note:** For AWS Lambda projects, use `languages/aws-lambda/nodejs-lambda.mdc` as the primary router; it references this base layer where applicable.

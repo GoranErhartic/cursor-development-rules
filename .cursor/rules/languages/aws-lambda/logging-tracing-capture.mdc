@@ -1,0 +1,248 @@
+---
+description: "Lambda X-Ray - HTTP and SQS trace capture, annotations vs metadata, CDK X-Ray config, service map"
+---
+
+# Lambda X-Ray Capture & CDK
+
+### Tracing AWS SDK Clients
+
+```typescript
+// src/shared/clients/dynamodb.ts
+
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
+import { tracer } from "@/shared/tracer";
+
+let docClient: DynamoDBDocumentClient | undefined;
+
+export function getDynamoDBClient(): DynamoDBDocumentClient {
+  if (!docClient) {
+    const client = new DynamoDBClient({});
+    
+    // Capture AWS SDK calls in X-Ray
+    tracer.captureAWSv3Client(client);
+    
+    docClient = DynamoDBDocumentClient.from(client);
+  }
+
+  return docClient;
+}
+```
+
+### Tracing HTTP Clients (External APIs)
+
+```typescript
+// src/shared/clients/http-client.ts
+
+import { tracer } from "@/shared/tracer";
+import { getRequestContext } from "@/shared/observability/request-context";
+import { logger } from "@/shared/logger";
+
+interface HttpRequestOptions {
+  method: "GET" | "POST" | "PUT" | "DELETE";
+  url: string;
+  headers?: Record<string, string>;
+  body?: unknown;
+  timeout?: number;
+}
+
+export async function tracedFetch<T>(options: HttpRequestOptions): Promise<T> {
+  const context = getRequestContext();
+  const segment = tracer.getSegment();
+  const subsegment = segment?.addNewSubsegment(`HTTP ${options.method} ${new URL(options.url).hostname}`);
+
+  const startTime = Date.now();
+
+  try {
+    // Add trace context to outgoing request
+    const headers: Record<string, string> = {
+      ...options.headers,
+      "X-Correlation-Id": context?.correlationId ?? "",
+    };
+
+    // Propagate X-Ray trace header for downstream tracing
+    if (process.env._X_AMZN_TRACE_ID) {
+      headers["X-Amzn-Trace-Id"] = process.env._X_AMZN_TRACE_ID;
+    }
+
+    subsegment?.addAnnotation("correlationId", context?.correlationId ?? "unknown");
+    subsegment?.addAnnotation("url", options.url);
+    subsegment?.addAnnotation("method", options.method);
+    subsegment?.addMetadata("requestHeaders", headers);
+
+    const response = await fetch(options.url, {
+      method: options.method,
+      headers,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: options.timeout ? AbortSignal.timeout(options.timeout) : undefined,
+    });
+
+    const duration = Date.now() - startTime;
+
+    subsegment?.addAnnotation("statusCode", response.status);
+    subsegment?.addMetadata("responseHeaders", Object.fromEntries(response.headers));
+
+    logger.info({
+      correlationId: context?.correlationId,
+      url: options.url,
+      method: options.method,
+      statusCode: response.status,
+      durationMs: duration,
+    }, "External HTTP request completed");
+
+    if (!response.ok) {
+      const error = new Error(`HTTP ${response.status}: ${response.statusText}`);
+      subsegment?.addError(error);
+      throw error;
+    }
+
+    return response.json() as Promise<T>;
+  } catch (error) {
+    subsegment?.addError(error as Error);
+    logger.error({
+      correlationId: context?.correlationId,
+      url: options.url,
+      err: error,
+    }, "External HTTP request failed");
+    throw error;
+  } finally {
+    subsegment?.close();
+  }
+}
+```
+
+### Cross-Service Trace Propagation
+
+```typescript
+// src/shared/sqs/publisher-traced.ts
+
+import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
+import { tracer } from "@/shared/tracer";
+import { getRequestContext } from "@/shared/observability/request-context";
+import { logger } from "@/shared/logger";
+
+const sqsClient = tracer.captureAWSv3Client(new SQSClient({}));
+
+export async function publishTracedMessage<T>(
+  queueUrl: string,
+  data: T,
+  options: { source: string }
+): Promise<string> {
+  const context = getRequestContext();
+  const segment = tracer.getSegment();
+  const subsegment = segment?.addNewSubsegment("SQS.SendMessage");
+
+  try {
+    const correlationId = context?.correlationId ?? randomUUID();
+
+    // Include trace context in message for downstream correlation
+    const envelope = {
+      data,
+      metadata: {
+        correlationId,
+        causationId: context?.causationId,
+        traceId: process.env._X_AMZN_TRACE_ID,
+        timestamp: new Date().toISOString(),
+        source: options.source,
+        retryCount: 0,
+      },
+    };
+
+    subsegment?.addAnnotation("correlationId", correlationId);
+    subsegment?.addAnnotation("queueUrl", queueUrl);
+
+    const result = await sqsClient.send(
+      new SendMessageCommand({
+        QueueUrl: queueUrl,
+        MessageBody: JSON.stringify(envelope),
+        MessageAttributes: {
+          correlationId: { DataType: "String", StringValue: correlationId },
+          traceId: { DataType: "String", StringValue: process.env._X_AMZN_TRACE_ID ?? "" },
+        },
+      })
+    );
+
+    subsegment?.addAnnotation("messageId", result.MessageId ?? "");
+
+    logger.info({
+      correlationId,
+      queueUrl,
+      messageId: result.MessageId,
+    }, "Message published to SQS");
+
+    return result.MessageId!;
+  } catch (error) {
+    subsegment?.addError(error as Error);
+    throw error;
+  } finally {
+    subsegment?.close();
+  }
+}
+```
+
+### X-Ray Annotations vs Metadata
+
+| Feature | Annotations | Metadata |
+|---------|-------------|----------|
+| Indexed | Yes | No |
+| Searchable | Yes | No |
+| Max size | 50 per segment | 64KB per segment |
+| Use for | Filter/query criteria | Debug details |
+
+```typescript
+// Annotations - searchable in X-Ray console
+subsegment?.addAnnotation("correlationId", correlationId); // ALWAYS
+subsegment?.addAnnotation("userId", userId);               // For user tracking
+subsegment?.addAnnotation("propertyId", propertyId);       // For entity tracking
+subsegment?.addAnnotation("error", true);                  // For error filtering
+subsegment?.addAnnotation("statusCode", 200);              // For status filtering
+
+// Metadata - for debugging, not searchable
+subsegment?.addMetadata("request", { body, headers });     // Full request
+subsegment?.addMetadata("response", { data, timing });     // Full response
+subsegment?.addMetadata("query", { sql, params });         // Database queries
+```
+
+
+## CDK X-Ray Configuration
+
+```typescript
+// cdk/lib/stacks/api-stack.ts
+
+import { Tracing } from "aws-cdk-lib/aws-lambda";
+
+const handler = new StandardLambda(this, "Handler", {
+  entry: "src/functions/handler.ts",
+  tracing: Tracing.ACTIVE, // Enable X-Ray
+  environment: {
+    AWS_XRAY_CONTEXT_MISSING: "LOG_ERROR", // Don't fail if no trace context
+    AWS_XRAY_DAEMON_ADDRESS: "127.0.0.1:2000", // Default daemon
+    POWERTOOLS_TRACER_CAPTURE_RESPONSE: "true",
+    POWERTOOLS_TRACER_CAPTURE_ERROR: "true",
+  },
+});
+```
+
+## X-Ray Service Map
+
+With proper correlation ID and trace propagation, X-Ray generates service maps showing:
+- Request flow across services
+- Latency breakdown per service
+- Error rates per segment
+- Downstream dependencies
+
+### Filter by Correlation ID
+
+```
+# X-Ray Console filter
+annotation.correlationId = "abc-123"
+
+# Filter failed requests
+annotation.error = true AND annotation.correlationId = "abc-123"
+
+# Filter by user
+annotation.userId = "user-456"
+```
+
+**See also:** `logging-setup.mdc`, `logging-tracing.mdc`, `logging-metrics-correlation.mdc`
+

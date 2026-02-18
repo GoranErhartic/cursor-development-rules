@@ -17,27 +17,40 @@ show_usage() {
     echo ""
     echo -e "${BLUE}Cursor Rules Installer${NC}"
     echo ""
-    echo "Usage: $0 <target-project-path>"
+    echo "Usage: $0 [--dry-run] <target-project-path>"
     echo ""
     echo "Description:"
     echo "  Copies .cursor/rules directory to the specified project."
     echo "  Automatically backs up existing rules if found."
     echo ""
+    echo "Options:"
+    echo "  --dry-run    Show what would be done without copying or modifying anything."
+    echo ""
     echo "Examples:"
     echo "  $0 /Users/username/projects/my-project"
-    echo "  $0 ~/projects/my-project"
+    echo "  $0 --dry-run ~/projects/my-project"
     echo "  $0 ."
     echo ""
 }
 
+DRY_RUN=false
+TARGET_PATH=""
+
+# Parse arguments
+for arg in "$@"; do
+    if [ "$arg" = "--dry-run" ]; then
+        DRY_RUN=true
+    else
+        TARGET_PATH="$arg"
+    fi
+done
+
 # Check if target path is provided
-if [ $# -eq 0 ]; then
+if [ -z "$TARGET_PATH" ]; then
     echo -e "${RED}Error: Target project path is required${NC}"
     show_usage
     exit 1
 fi
-
-TARGET_PATH="$1"
 
 # Validate source rules directory exists
 if [ ! -d "$SOURCE_RULES_DIR" ]; then
@@ -55,6 +68,25 @@ fi
 TARGET_PATH="$(cd "$TARGET_PATH" && pwd)"
 TARGET_CURSOR_DIR="${TARGET_PATH}/.cursor"
 TARGET_RULES_DIR="${TARGET_CURSOR_DIR}/rules"
+
+if [ "$DRY_RUN" = true ]; then
+    echo -e "${BLUE}[DRY RUN] Would install Cursor rules${NC}"
+    echo "Source: ${SOURCE_RULES_DIR}"
+    echo "Target: ${TARGET_RULES_DIR}"
+    echo ""
+    if [ ! -d "$TARGET_CURSOR_DIR" ]; then
+        echo -e "${YELLOW}[DRY RUN] Would create .cursor directory${NC}"
+    fi
+    if [ -d "$TARGET_RULES_DIR" ]; then
+        BACKUP_NAME="rules_bkp"
+        [ -d "${TARGET_CURSOR_DIR}/${BACKUP_NAME}" ] && BACKUP_NAME="rules_bkp_$(date +"%Y%m%d_%H%M%S")"
+        echo -e "${YELLOW}[DRY RUN] Would backup existing rules to ${BACKUP_NAME}${NC}"
+    fi
+    echo -e "${BLUE}[DRY RUN] Would copy rules from source to target${NC}"
+    echo ""
+    echo -e "${GREEN}[DRY RUN] No changes made.${NC}"
+    exit 0
+fi
 
 echo -e "${BLUE}Installing Cursor rules...${NC}"
 echo "Source: ${SOURCE_RULES_DIR}"

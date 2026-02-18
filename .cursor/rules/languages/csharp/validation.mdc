@@ -1,6 +1,5 @@
 ---
 description: "FluentValidation patterns for request validation in ASP.NET Core"
-globs: ["**/*Validator*.cs", "**/Validators/**/*.cs", "**/*Command*.cs", "**/*Query*.cs"]
 ---
 
 # FluentValidation Patterns

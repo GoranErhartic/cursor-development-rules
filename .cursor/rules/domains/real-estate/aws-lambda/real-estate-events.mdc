@@ -1,0 +1,293 @@
+---
+description: "Real estate domain - domain events, event publishers, event-driven flow"
+tags: ["domain-pack", "real-estate", "events"]
+complexity: "advanced"
+relatedRules: ["domains/real-estate/aws-lambda/real-estate-domain.mdc", "domains/real-estate/aws-lambda/real-estate-rules.mdc"]
+dependsOn: ["languages/aws-lambda/sns-events.mdc", "languages/aws-lambda/eventbridge.mdc"]
+deprecated: false
+replacedBy: ""
+lastReviewed: "2026-02-18"
+---
+## Domain Events
+
+### Event Types
+
+```typescript
+// src/domain/events/types.ts
+
+export interface DomainEvent<T = unknown> {
+  eventId: string;
+  eventType: string;
+  aggregateType: string;
+  aggregateId: string;
+  version: number;
+  timestamp: string;
+  correlationId: string;
+  causationId?: string;
+  metadata: {
+    source: string;
+    userId?: string;
+    traceId?: string;
+  };
+  payload: T;
+}
+```
+
+### Property Events
+
+```typescript
+// src/domain/events/property.events.ts
+
+import type { DomainEvent } from "./types";
+import type { Address, PropertyType } from "../entities/property.entity";
+
+// Event payloads
+export interface PropertyCreatedPayload {
+  propertyId: string;
+  address: Address;
+  propertyType: PropertyType;
+  bedrooms: number;
+  bathrooms: number;
+  squareFeet: number;
+  yearBuilt?: number;
+  features: string[];
+  ownerId: string;
+}
+
+export interface PropertyUpdatedPayload {
+  propertyId: string;
+  changes: Record<string, { old: unknown; new: unknown }>;
+}
+
+export interface PropertyDeletedPayload {
+  propertyId: string;
+  reason?: string;
+}
+
+// Event types
+export type PropertyCreatedEvent = DomainEvent<PropertyCreatedPayload>;
+export type PropertyUpdatedEvent = DomainEvent<PropertyUpdatedPayload>;
+export type PropertyDeletedEvent = DomainEvent<PropertyDeletedPayload>;
+```
+
+### Listing Events
+
+```typescript
+// src/domain/events/listing.events.ts
+
+import type { DomainEvent } from "./types";
+import type { ListingType, ListingStatus } from "../entities/listing.entity";
+
+export interface ListingPublishedPayload {
+  listingId: string;
+  propertyId: string;
+  agentId: string;
+  price: number;
+  listingType: ListingType;
+  publishedAt: string;
+  expiresAt: string;
+}
+
+export interface ListingPriceChangedPayload {
+  listingId: string;
+  propertyId: string;
+  oldPrice: number;
+  newPrice: number;
+  changePercentage: number;
+}
+
+export interface ListingSoldPayload {
+  listingId: string;
+  propertyId: string;
+  agentId: string;
+  listingPrice: number;
+  soldPrice: number;
+  soldAt: string;
+  daysOnMarket: number;
+}
+
+export interface ListingWithdrawnPayload {
+  listingId: string;
+  propertyId: string;
+  agentId: string;
+  reason?: string;
+  withdrawnAt: string;
+}
+
+export interface ListingExpiredPayload {
+  listingId: string;
+  propertyId: string;
+  agentId: string;
+  expiredAt: string;
+  daysOnMarket: number;
+}
+
+// Event types
+export type ListingPublishedEvent = DomainEvent<ListingPublishedPayload>;
+export type ListingPriceChangedEvent = DomainEvent<ListingPriceChangedPayload>;
+export type ListingSoldEvent = DomainEvent<ListingSoldPayload>;
+export type ListingWithdrawnEvent = DomainEvent<ListingWithdrawnPayload>;
+export type ListingExpiredEvent = DomainEvent<ListingExpiredPayload>;
+```
+
+### Lead Events
+
+```typescript
+// src/domain/events/lead.events.ts
+
+import type { DomainEvent } from "./types";
+import type { Contact, LeadSource, LeadStatus } from "../entities/lead.entity";
+
+export interface LeadCapturedPayload {
+  leadId: string;
+  propertyId: string;
+  agentId: string;
+  contact: Contact;
+  source: LeadSource;
+  message?: string;
+}
+
+export interface LeadQualifiedPayload {
+  leadId: string;
+  propertyId: string;
+  agentId: string;
+  budget?: number;
+  preApproved: boolean;
+}
+
+export interface LeadConvertedPayload {
+  leadId: string;
+  propertyId: string;
+  agentId: string;
+  convertedAt: string;
+  offerId?: string;
+}
+
+export interface ViewingScheduledPayload {
+  viewingId: string;
+  leadId: string;
+  propertyId: string;
+  agentId: string;
+  scheduledAt: string;
+  duration: number; // minutes
+}
+
+export interface OfferSubmittedPayload {
+  offerId: string;
+  leadId: string;
+  propertyId: string;
+  listingId: string;
+  agentId: string;
+  offerAmount: number;
+  listingPrice: number;
+  conditions: string[];
+  expiresAt: string;
+}
+
+// Event types
+export type LeadCapturedEvent = DomainEvent<LeadCapturedPayload>;
+export type LeadQualifiedEvent = DomainEvent<LeadQualifiedPayload>;
+export type LeadConvertedEvent = DomainEvent<LeadConvertedPayload>;
+export type ViewingScheduledEvent = DomainEvent<ViewingScheduledPayload>;
+export type OfferSubmittedEvent = DomainEvent<OfferSubmittedPayload>;
+```
+
+## Event Publishers
+
+```typescript
+// src/domain/events/publisher.ts
+
+import { randomUUID } from "node:crypto";
+import { publishEvent } from "@/shared/sns/publisher";
+import type { DomainEvent } from "./types";
+import { logger } from "@/shared/logger";
+
+const PROPERTY_EVENTS_TOPIC = process.env.PROPERTY_EVENTS_TOPIC_ARN!;
+const LISTING_EVENTS_TOPIC = process.env.LISTING_EVENTS_TOPIC_ARN!;
+const LEAD_EVENTS_TOPIC = process.env.LEAD_EVENTS_TOPIC_ARN!;
+
+export async function publishPropertyEvent<T>(
+  eventType: string,
+  propertyId: string,
+  payload: T,
+  options: { correlationId?: string; userId?: string } = {}
+): Promise<string> {
+  const event = createDomainEvent(
+    eventType,
+    "Property",
+    propertyId,
+    payload,
+    options
+  );
+
+  logger.info({ eventType, propertyId }, "Publishing property event");
+
+  return publishEvent(PROPERTY_EVENTS_TOPIC, event);
+}
+
+export async function publishListingEvent<T>(
+  eventType: string,
+  listingId: string,
+  payload: T,
+  options: { correlationId?: string; userId?: string } = {}
+): Promise<string> {
+  const event = createDomainEvent(
+    eventType,
+    "Listing",
+    listingId,
+    payload,
+    options
+  );
+
+  logger.info({ eventType, listingId }, "Publishing listing event");
+
+  return publishEvent(LISTING_EVENTS_TOPIC, event);
+}
+
+export async function publishLeadEvent<T>(
+  eventType: string,
+  leadId: string,
+  payload: T,
+  options: { correlationId?: string; userId?: string } = {}
+): Promise<string> {
+  const event = createDomainEvent(
+    eventType,
+    "Lead",
+    leadId,
+    payload,
+    options
+  );
+
+  logger.info({ eventType, leadId }, "Publishing lead event");
+
+  return publishEvent(LEAD_EVENTS_TOPIC, event);
+}
+
+function createDomainEvent<T>(
+  eventType: string,
+  aggregateType: string,
+  aggregateId: string,
+  payload: T,
+  options: { correlationId?: string; userId?: string; causationId?: string }
+): DomainEvent<T> {
+  return {
+    eventId: randomUUID(),
+    eventType,
+    aggregateType,
+    aggregateId,
+    version: 1,
+    timestamp: new Date().toISOString(),
+    correlationId: options.correlationId ?? randomUUID(),
+    causationId: options.causationId,
+    metadata: {
+      source: process.env.SERVICE_NAME ?? "real-estate-api",
+      userId: options.userId,
+      traceId: process.env._X_AMZN_TRACE_ID,
+    },
+    payload,
+  };
+}
+```
+
+
+**See also:** `domains/real-estate/aws-lambda/real-estate-domain.mdc`, `domains/real-estate/aws-lambda/real-estate-rules.mdc`, `languages/aws-lambda/dynamodb.mdc`

@@ -1,0 +1,71 @@
+---
+description: "React + TypeScript project guide - technology stack, rule routing, key conventions"
+globs: ["**/*.tsx", "**/vite.config.*", "**/next.config.*"]
+---
+
+# React + TypeScript Frontend Guide
+
+## Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Runtime | React 18+ |
+| Language | TypeScript |
+| Styling | Tailwind CSS |
+| Data fetching | TanStack Query |
+| Forms | React Hook Form |
+| Validation | Zod |
+| Routing | React Router v7 |
+| State | Zustand, React context |
+| Testing | Vitest, React Testing Library |
+| Build | Vite or Next.js |
+| Package Manager | pnpm |
+
+## Rule Routing
+
+Consult these rules based on what you are working on:
+
+## Quick Reference
+
+- Build UI feature: `languages/react/components.mdc`, `languages/react/styling.mdc`, `languages/react/accessibility.mdc`
+- Build forms: `languages/react/forms.mdc`, `languages/react/validation.mdc`, `languages/react/error-handling.mdc`
+- Data/state flow: `languages/react/data-fetching.mdc`, `languages/react/state-management.mdc`, `languages/react/testing.mdc`
+- Routing/resilience: `languages/react/routing.mdc`, `languages/react/error-boundaries.mdc`, `languages/react/performance.mdc`
+
+### UI & Components
+- Component design, composition, compound components → `languages/react/components.mdc`
+- Styling (Tailwind, design tokens, dark mode) → `languages/react/styling.mdc`
+- Forms (React Hook Form, validation) → `languages/react/forms.mdc`
+- Accessibility (ARIA, keyboard, focus, screen readers) → `languages/react/accessibility.mdc`
+
+### Data & State
+- Data fetching (TanStack Query, cache, mutations) → `languages/react/data-fetching.mdc`
+- State management (Zustand, hooks, context) → `languages/react/state-management.mdc`
+
+### Routing & Navigation
+- React Router v7 (loaders, actions, nested routes) → `languages/react/routing.mdc`
+
+### Cross-Cutting
+- Code quality (TypeScript strict, React 19 idioms, hooks) → `languages/react/code-quality.mdc`
+- Validation (Zod schemas, type inference) → `languages/react/validation.mdc`
+- Error handling (Result pattern, global handling, toasts, async, forms) → `languages/react/error-handling.mdc`
+- Error Boundaries (class component, fallback UI, granular placement) → `languages/react/error-boundaries.mdc`
+- Security (XSS, CSP, secure storage, CORS) → `languages/react/security.mdc`
+- Input sanitization (DOMPurify, URL validation, file upload) → `languages/react/input-sanitization.mdc`
+- Performance (memo, useMemo, lazy loading, code splitting) → `languages/react/performance.mdc`
+- Testing (Vitest, React Testing Library, AAA) → `languages/react/testing.mdc`
+- Dependencies (pnpm workspace, security, licensing) → `languages/react/dependencies.mdc`
+
+### Architecture Patterns (request when needed)
+- Clean Architecture, CQRS, DDD → `patterns/architecture.mdc`
+- Clean code principles → `patterns/clean-code.mdc`
+- API design conventions → `patterns/api-design.mdc`
+
+## Key Conventions
+
+- **Components:** Functional components; composition over configuration; clear prop types
+- **State:** Prefer local state; Zustand for global; avoid prop drilling
+- **Data:** TanStack Query for server state; optimistic updates where appropriate
+- **Validation:** Zod at boundaries; integrate with React Hook Form
+- **Testing:** TDD; Vitest; React Testing Library; user-centric tests
+- **Accessibility:** ARIA where needed; keyboard navigation; focus management

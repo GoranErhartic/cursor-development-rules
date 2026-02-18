@@ -1,6 +1,5 @@
-﻿---
+---
 description: "Code quality standards - Java 25 LTS idioms, naming conventions, records, sealed classes, virtual threads"
-globs: ["**/*.java"]
 ---
 
 # Code Quality Standards

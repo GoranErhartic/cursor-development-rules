@@ -1,0 +1,128 @@
+---
+description: "Powertools Batch - BatchProcessor with processPartialResponse, SQS/Kinesis/DynamoDB Streams partial failure handling, record processor function pattern, batchItemFailures response"
+---
+
+# Powertools Batch Processing
+
+## Overview
+
+`@aws-lambda-powertools/batch` provides a standard way to process SQS, Kinesis, and DynamoDB Streams events with automatic partial batch failure reporting. Use it instead of manually building `batchItemFailures` and classifying retryable errors.
+
+## Dependencies
+
+```bash
+pnpm add @aws-lambda-powertools/batch
+```
+
+## SQS Batch Processor
+
+```typescript
+// src/functions/process-listings/handler.ts
+
+import type { SQSEvent, SQSRecord, SQSBatchResponse } from "aws-lambda";
+import { BatchProcessor, EventType, processPartialResponse } from "@aws-lambda-powertools/batch";
+import { logger } from "@/shared/logger";
+import { listingService } from "@/services/listing.service";
+
+const processor = new BatchProcessor(EventType.SQS);
+
+export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
+  return processPartialResponse(event, processor, async (record: SQSRecord) => {
+    const message = JSON.parse(record.body);
+    const { eventType, payload } = message.data;
+
+    logger.info({ eventType, messageId: record.messageId }, "Processing event");
+
+    const result = await listingService.handleListingPublished(payload);
+
+    if (!result.success) {
+      if (result.error.isRetryable) {
+        throw new Error(result.error.message); // Will be reported as batch item failure
+      }
+      throw new NonRetryableError(result.error.message, result.error.code);
+    }
+  });
+};
+
+class NonRetryableError extends Error {
+  constructor(
+    message: string,
+    public readonly code: string
+  ) {
+    super(message);
+    this.name = "NonRetryableError";
+  }
+}
+```
+
+## Retryable vs Non-Retryable
+
+Powertools Batch reports failed items so SQS retries them. For non-retryable errors (e.g. validation), throw a custom error and use a **failure handler** to avoid retries, or let the message eventually go to the DLQ after max receives. To skip retries for non-retryable errors, throw with a specific name and handle in a custom `onFailure` callback (see Powertools docs) or use your existing SQS retry ladder and DLQ.
+
+```typescript
+// Prefer: throw for retryable, throw NonRetryableError for don't-retry
+// NonRetryableError: message still returns in batchItemFailures by default;
+// use reportBatchItemFailure: false in processPartialResponse options for non-retryable
+// when supported, or document that non-retryable go to DLQ after max receives.
+```
+
+## DynamoDB Streams Batch Processor
+
+```typescript
+// src/functions/sync-to-opensearch/handler.ts
+
+import type { DynamoDBStreamEvent, DynamoDBRecord } from "aws-lambda";
+import { BatchProcessor, EventType, processPartialResponse } from "@aws-lambda-powertools/batch";
+import { unmarshall } from "@aws-sdk/util-dynamodb";
+import { opensearchService } from "@/services/opensearch.service";
+
+const processor = new BatchProcessor(EventType.DynamoDBStreams);
+
+export const handler = async (event: DynamoDBStreamEvent) => {
+  return processPartialResponse(event, processor, async (record: DynamoDBRecord) => {
+    if (record.eventName === "REMOVE") {
+      const oldImage = record.dynamodb?.OldImage;
+      if (oldImage) {
+        const item = unmarshall(oldImage);
+        await opensearchService.deleteDocument("listings", `${item.propertyId}-${item.listingId}`);
+      }
+      return;
+    }
+
+    const newImage = record.dynamodb?.NewImage;
+    if (!newImage) return;
+
+    const item = unmarshall(newImage);
+    if (item.entityType !== "Listing") return;
+
+    await opensearchService.indexDocument("listings", {
+      id: `${item.propertyId}-${item.listingId}`,
+      ...item,
+    });
+  });
+};
+```
+
+## Kinesis Data Streams
+
+Use `EventType.KinesisDataStreams` and a record handler that receives a KinesisStreamRecord. Same `processPartialResponse` pattern; failed records are reported for Kinesis checkpointing.
+
+## Integration with Error Classification
+
+Keep using your existing `AppError` and `isRetryable` logic inside the record handler. Throw for retry (message reappears), throw `NonRetryableError` (or similar) for business/validation failures so you can log and optionally avoid retries via DLQ routing or failure callback.
+
+## Conventions
+
+- Use `processPartialResponse` for all SQS/DynamoDB Streams/Kinesis handlers
+- Throw to report a record as failed (batch item failure)
+- Classify errors as retryable vs non-retryable; use DLQ for non-retryable after max receives
+- Keep record handler logic pure (no side effects except the intended processing)
+- Test with mixed success/failure batches (see `testing.mdc`)
+
+## Anti-Patterns
+
+- Manually building `batchItemFailures` when Powertools Batch can do it
+- Swallowing errors inside the record handler (always throw on failure)
+- Forgetting to enable `reportBatchItemFailures` on the SQS event source in CDK
+
+**See also:** `sqs-processing.mdc`, `error-handling.mdc`, `testing.mdc`, `lambda-handlers.mdc`

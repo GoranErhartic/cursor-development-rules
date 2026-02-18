@@ -1,0 +1,41 @@
+---
+description: "Quick-start playbook for rule discovery - first-run steps, task-to-rule shortcuts, and fallback when project context is missing."
+tags: ["onboarding", "discovery", "navigation"]
+complexity: "beginner"
+relatedRules: ["rule-index.mdc", "agent-behavior.mdc", "project-context.mdc"]
+dependsOn: []
+deprecated: false
+replacedBy: ""
+lastReviewed: "2026-02-18"
+---
+
+# Quick Start
+
+Use this file when you need to quickly decide which rules to load.
+
+## First 4 Steps
+
+1. Read `agent-behavior.mdc` for core constraints and conflict protocol.
+2. Read `project-context.mdc` to identify active stack routers.
+3. Open the relevant router from `rule-index.mdc`.
+4. Load only 2–3 rules needed for the current sub-task.
+
+## If `project-context.mdc` Is Placeholder-Only
+
+Request `development/project-onboarding.mdc`, generate `project-context.mdc`, then continue with router-driven loading.
+
+## Common Task Shortcuts
+
+- Build API endpoint: `languages/*/controllers.mdc`, `languages/*/validation.mdc`, `languages/*/error-handling.mdc`
+- Add tests: `languages/*/testing.mdc`, `patterns/testing.mdc`, `development/tdd-workflow.mdc`
+- Security hardening: `languages/*/security.mdc`, `languages/*/input-sanitization.mdc`, `languages/*/auth.mdc`
+- Refactor/cleanup: `patterns/clean-code.mdc`, stack `languages/*/code-quality.mdc`
+- Infra changes (Lambda): `languages/aws-lambda/cdk-infrastructure-*.mdc`, `languages/aws-lambda/monitoring.mdc`, `languages/aws-lambda/security.mdc`
+
+## Rule Loading Limits
+
+- Keep active rule set small: router + 2–4 rules
+- Prefer specific stack rules over broad conceptual reads
+- Add pattern rules only when the task crosses stack boundaries
+
+**See also:** `rule-index.mdc`, `README.md`, `development/project-onboarding.mdc`

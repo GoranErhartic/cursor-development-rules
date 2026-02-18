@@ -1,0 +1,31 @@
+---
+description: "RDS Proxy patterns - PostgreSQL connection pooling, Prisma integration, transaction handling, read replicas"
+---
+
+# RDS Proxy with PostgreSQL
+
+## Why RDS Proxy
+
+- Lambda scales to many concurrent executions; each can open a DB connection. RDS Proxy pools connections and multiplexes, avoiding exhaustion and reducing cold-start connection cost.
+- Use RDS Proxy endpoint (not RDS direct) in `DATABASE_URL` for Lambda.
+
+## Prisma
+
+- **Schema:** `datasource db { provider = "postgresql", url = env("DATABASE_URL") }`; use RDS Proxy URL; `binaryTargets` include Lambda runtime (e.g. `rhel-openssl-3.0.x`)
+- **Client:** Single `PrismaClient` instance (singleton); avoid creating per request
+- **Transactions:** `prisma.$transaction([...])` for atomicity; use interactive transactions only when needed (long-running can hold connection)
+- **Connection:** Set pool size in URL if needed; RDS Proxy handles pooling; keep connections short-lived (no long-held transactions in Lambda)
+
+## Read Replicas
+
+- Use separate `DATABASE_READ_URL` for read-only queries if you have replicas; create second Prisma client or switch URL for read path; ensure replication lag is acceptable
+
+## Conventions
+
+- One PrismaClient per Lambda; use RDS Proxy URL; avoid N+1 (use include/select); close client on shutdown if implementing graceful close
+
+## Anti-Patterns
+
+- Direct RDS URL in Lambda; new client per invocation; long-running transactions; ignoring connection limits
+
+**See also:** `dynamodb.mdc`, `lambda-handlers.mdc`, `cdk-infrastructure-data.mdc`

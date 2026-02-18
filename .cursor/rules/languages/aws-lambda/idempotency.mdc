@@ -1,0 +1,32 @@
+---
+description: "Lambda idempotency - DynamoDB-based deduplication, idempotency keys from event fields, Powertools Idempotency, exactly-once SQS processing, conditional writes"
+---
+
+# Idempotency Patterns
+
+## Why
+
+SQS/SNS and Lambda retries deliver at least once. Idempotency ensures processing the same message/request multiple times has the same effect as once (e.g. no duplicate payments, emails, or records).
+
+## Powertools Idempotency
+
+- **Persistence:** DynamoDB table with `id`, `expiration`, `status`, `data` (or equivalent); TTL on expiration
+- **Config:** `eventKeyJmesPath` to extract key from event (e.g. `body.idempotencyKey`, or for SQS `Records[0].body` then parse and use eventId/aggregateId); `expiresAfterSeconds`; `throwOnNoIdempotencyKey` as needed
+- **Wrapper:** `makeIdempotent(handler, { persistenceStore, config })` around handler; handler receives same event; first call runs and stores result; duplicate key returns stored result
+- **Method-level:** `idempotent({ persistenceStore, config })` decorator on async method; key from first argument (e.g. payload.idempotencyKey)
+
+## Key Choice
+
+- **API:** Client sends `Idempotency-Key` header or body field; use for POST/PUT
+- **SQS:** Use `eventId` from envelope, or `messageId` + aggregateId; ensure key is stable per logical request
+- **SNS:** Use `eventId` or (aggregateId + eventType)
+
+## Conventions
+
+- Required for all state-changing SQS consumers and mutation APIs; store in DynamoDB with TTL; use stable, unique key per logical operation
+
+## Anti-Patterns
+
+- No idempotency for SQS consumers that write; key derived from unstable data; TTL too long (resource exhaustion)
+
+**See also:** `sqs-processing.mdc`, `dynamodb.mdc`, `error-handling.mdc`

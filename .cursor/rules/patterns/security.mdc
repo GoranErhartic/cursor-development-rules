@@ -1,5 +1,5 @@
 ---
-description: "Security principles - secrets management, HTTPS, CORS, headers, authentication concepts"
+description: "Security principles - secrets management (env vars, secret managers), HTTPS/TLS enforcement, CORS configuration, security headers (Helmet/CSP/HSTS), RBAC authorization, password hashing (Argon2), rate limiting, audit logging, dependency scanning"
 ---
 
 # Security Principles

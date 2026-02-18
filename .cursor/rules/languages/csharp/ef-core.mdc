@@ -1,6 +1,5 @@
 ---
 description: "Entity Framework Core patterns - DbContext, repositories, migrations, query optimization"
-globs: ["**/*DbContext*.cs", "**/Entities/**/*.cs", "**/Repositories/**/*.cs", "**/Migrations/**/*.cs", "**/*Repository*.cs"]
 ---
 
 # Entity Framework Core Patterns
@@ -151,4 +150,4 @@ catch
 }
 ```
 
-**See also:** `architecture.mdc`, `mediator.mdc`
+**See also:** `../../patterns/architecture.mdc`, `mediator.mdc`

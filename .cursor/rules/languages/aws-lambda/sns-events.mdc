@@ -1,0 +1,36 @@
+---
+description: "SNS Lambda publishing - fan-out to SQS, message attributes for filtering, SNS topic CDK construct, event envelope structure, SNSEvent handler"
+---
+
+# SNS Event Publishing Patterns
+
+## Event Envelope
+
+- Use consistent envelope: `eventId`, `eventType`, `aggregateId`, `aggregateType`, `version`, `timestamp`, `correlationId`, `causationId?`, `metadata: { source, userId?, traceId? }`, `payload`
+- Generate `eventId` (e.g. UUID); propagate `correlationId` from context or create new
+
+## Publishing
+
+- **Client:** `@aws-sdk/client-sns`; `PublishCommand` with `TopicArn`, `Message` (JSON string), `MessageAttributes` for filtering (e.g. `eventType` as String)
+- **Message:** Stringify envelope; set `MessageGroupId` for FIFO topics
+- **Attributes:** Use for SQS subscription filter policies; type String/Number/Binary
+
+## Receiving (SNS → Lambda)
+
+- **Event:** `SNSEvent`; `event.Records[].Sns.Message` is stringified payload; parse JSON; validate; process
+- **Idempotency:** Required when processing can be duplicated; use idempotency key from eventId or aggregateId+eventType
+
+## CDK
+
+- Create topic with `new sns.Topic()`; subscribe queue with `topic.addSubscription(new subscriptions.SqsSubscription(queue))`; filter policy on subscription for attribute-based filtering
+- FIFO: Topic and queue must be FIFO; MessageGroupId required
+
+## Conventions
+
+- Always use envelope; include correlationId; use message attributes for filtering; idempotent processing; log publish/consume with correlationId
+
+## Anti-Patterns
+
+- Raw payload without envelope; no correlationId; no idempotency for consumers; publishing without error handling
+
+**See also:** `sqs-processing.mdc`, `eventbridge.mdc`, `idempotency.mdc`, `domains/real-estate/aws-lambda/real-estate-events.mdc`

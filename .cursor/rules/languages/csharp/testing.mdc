@@ -1,6 +1,5 @@
 ---
 description: "Testing strategy - TDD workflow, xUnit, FluentAssertions, Moq, Testcontainers"
-globs: ["**/*Tests.cs", "**/*Test.cs", "**/Tests/**/*.cs", "**/*.Tests/**/*.cs"]
 ---
 
 # Testing Strategy

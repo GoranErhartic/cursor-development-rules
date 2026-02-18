@@ -1,0 +1,152 @@
+---
+description: "CDK multi-environment - context parameters, stage-aware stack naming, dev staging prod, conditional resources"
+---
+
+# Multi-Environment CDK
+
+## Overview
+
+Use CDK context and environment parameters to deploy the same app to dev, staging, and prod with stage-specific configuration. Use conditional resources (e.g. provisioned concurrency only in prod) and stage-aware stack names.
+
+## Context and cdk.json
+
+```json
+// cdk.json
+{
+  "app": "npx ts-node bin/app.ts",
+  "context": {
+    "dev": {
+      "stage": "dev",
+      "logLevel": "DEBUG",
+      "provisionedConcurrency": 0
+    },
+    "staging": {
+      "stage": "staging",
+      "logLevel": "INFO",
+      "provisionedConcurrency": 1
+    },
+    "prod": {
+      "stage": "prod",
+      "logLevel": "WARN",
+      "provisionedConcurrency": 5
+    }
+  }
+}
+```
+
+## Stage-Aware App Entry
+
+```typescript
+// cdk/bin/app.ts
+
+import "source-map-support/register";
+import { App, Environment } from "aws-cdk-lib";
+import { DataStack } from "../lib/stacks/data-stack";
+import { ApiStack } from "../lib/stacks/api-stack";
+
+const app = new App();
+
+const stage = app.node.tryGetContext("stage") ?? "dev";
+const context = app.node.tryGetContext(stage) ?? {};
+const env: Environment = {
+  account: process.env.CDK_DEFAULT_ACCOUNT,
+  region: process.env.CDK_DEFAULT_REGION ?? "us-east-1",
+};
+
+const dataStack = new DataStack(app, `RealEstateData-${stage}`, {
+  env,
+  stage,
+  ...context,
+});
+
+new ApiStack(app, `RealEstateApi-${stage}`, {
+  env,
+  stage,
+  dataTable: dataStack.dataTable,
+  idempotencyTable: dataStack.idempotencyTable,
+  opensearchEndpoint: dataStack.opensearchEndpoint,
+  ...context,
+});
+
+app.synth();
+```
+
+## Conditional Resources
+
+```typescript
+// cdk/lib/stacks/api-stack.ts
+
+import { Stack, StackProps } from "aws-cdk-lib";
+import { Construct } from "constructs";
+import { Alias } from "aws-cdk-lib/aws-lambda";
+import { StandardLambda } from "../constructs/lambda-function";
+
+interface ApiStackProps extends StackProps {
+  stage: string;
+  provisionedConcurrency?: number;
+  dataTable: Table;
+}
+
+export class ApiStack extends Stack {
+  constructor(scope: Construct, id: string, props: ApiStackProps) {
+    super(scope, id, props);
+
+    const criticalHandler = new StandardLambda(this, "CriticalHandler", {
+      entry: "src/functions/critical/handler.ts",
+      handler: "handler",
+      memorySize: 512,
+      timeoutSeconds: 30,
+      environment: {
+        STAGE: props.stage,
+        LOG_LEVEL: props.logLevel ?? "INFO",
+      },
+    });
+
+    if ((props.provisionedConcurrency ?? 0) > 0) {
+      const version = criticalHandler.currentVersion;
+      new Alias(this, "CriticalAlias", {
+        aliasName: "live",
+        version,
+        provisionedConcurrentExecutions: props.provisionedConcurrency,
+      });
+    }
+  }
+}
+```
+
+## Environment Variables per Stage
+
+Pass stage and config into Lambda env so runtime behavior can differ:
+
+```typescript
+environment: {
+  STAGE: props.stage,
+  LOG_LEVEL: context.logLevel ?? "INFO",
+  CORS_ORIGIN: props.stage === "prod" ? "https://app.example.com" : "*",
+}
+```
+
+## Deploy by Stage
+
+```bash
+cdk deploy --all -c stage=dev
+cdk deploy --all -c stage=staging
+cdk deploy --all -c stage=prod --require-approval broadening
+```
+
+## Conventions
+
+- Use a single `stage` context key to drive all stage-specific config
+- Name stacks with stage suffix for multiple deployments in same account
+- Use conditional resources for cost (e.g. no provisioned concurrency in dev)
+- Never put secrets in context; use Parameter Store or Secrets Manager per env
+- Consider separate AWS accounts per stage for prod isolation
+
+## Anti-Patterns
+
+- Hardcoding stage or account in stack code
+- Same stack names across stages without suffix (collisions)
+- Provisioned concurrency or expensive resources in dev
+- Secrets in cdk.json or context
+
+**See also:** `cdk-infrastructure-lambda.mdc`, `cdk-infrastructure-data.mdc`, `cdk-infrastructure-monitoring.mdc`, `security.mdc`

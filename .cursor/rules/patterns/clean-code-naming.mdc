@@ -1,0 +1,70 @@
+---
+description: "Clean code naming - intention-revealing names, avoid abbreviations, consistent vocabulary, avoid negated booleans, readability"
+---
+
+# Clean Code: Naming and Intent
+
+## Core Philosophy
+
+> Code is read far more often than it is written. Optimize for the reader.
+
+- Prioritize **readability** over cleverness
+- Write for the maintainer who will read this code in 6 months (it might be you)
+- Clarity beats brevity — verbose but clear is better than terse but cryptic
+
+## Use Intention-Revealing Names
+
+Names should answer: why it exists, what it does, and how it's used.
+
+```
+// BAD
+int d;                    // elapsed time in days
+List<int[]> theList;      // what kind of list?
+void proc();              // process what?
+
+// GOOD
+int elapsedTimeInDays;
+List<Cell> flaggedCells;
+void processPayment();
+```
+
+## Avoid Abbreviations
+
+Spell out names unless the abbreviation is universally understood.
+
+- **Acceptable:** `id`, `url`, `http`, `db`, `api`
+- **Avoid:** `usr`, `mgr`, `cnt`, `qty`, `btn`, `msg`
+
+## Consistent Vocabulary
+
+Use one word per concept consistently throughout the codebase.
+
+```
+// BAD - Inconsistent naming
+fetchUsers()
+getOrders()
+retrieveProducts()
+loadCustomers()
+
+// GOOD - Consistent verb usage
+getUsers()
+getOrders()
+getProducts()
+getCustomers()
+```
+
+## Avoid Negated Booleans
+
+Positive names are easier to reason about, especially when combined with logical operators.
+
+```
+// BAD - Double negatives are confusing
+if (!user.isNotDisabled) { }
+if (!order.isInvalid) { }
+
+// GOOD - Positive names
+if (user.isEnabled) { }
+if (order.isValid) { }
+```
+
+**See also:** `patterns/clean-code-functions.mdc`, `patterns/clean-code-hygiene.mdc`, `patterns/architecture.mdc`

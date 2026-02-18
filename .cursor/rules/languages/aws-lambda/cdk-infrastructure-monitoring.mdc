@@ -1,0 +1,166 @@
+---
+description: "CDK CloudWatch alarms, app entry point, conventions and anti-patterns"
+---
+## CloudWatch Alarms
+
+Add alarms for Lambda errors, throttles, duration, and SQS queue depth. Notify via SNS for critical failures.
+
+```typescript
+// cdk/lib/stacks/monitoring-stack.ts
+
+import { Stack, StackProps, Duration } from "aws-cdk-lib";
+import { Construct } from "constructs";
+import {
+  Alarm,
+  ComparisonOperator,
+  TreatMissingData,
+  Metric,
+  Stats,
+} from "aws-cdk-lib/aws-cloudwatch";
+import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
+import { Topic } from "aws-cdk-lib/aws-sns";
+import { Function as LambdaFunction } from "aws-cdk-lib/aws-lambda";
+import { Queue } from "aws-cdk-lib/aws-sqs";
+
+interface MonitoringStackProps extends StackProps {
+  lambdaFunctions: LambdaFunction[];
+  queues?: Queue[];
+  alarmTopic?: Topic;
+}
+
+export class MonitoringStack extends Stack {
+  constructor(scope: Construct, id: string, props: MonitoringStackProps) {
+    super(scope, id, props);
+
+    const alarmTopic =
+      props.alarmTopic ??
+      new Topic(this, "AlarmTopic", { displayName: "Real Estate Alarms" });
+
+    for (const fn of props.lambdaFunctions) {
+      // Lambda errors
+      new Alarm(this, `${fn.node.id}Errors`, {
+        alarmName: `${fn.functionName}-errors`,
+        metric: fn.metricErrors({ period: Duration.minutes(1) }),
+        threshold: 5,
+        evaluationPeriods: 1,
+        comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: TreatMissingData.NOT_BREACHING,
+        alarmDescription: `Lambda ${fn.functionName} error count`,
+      }).addAlarmAction(new SnsAction(alarmTopic));
+
+      // Lambda throttles
+      new Alarm(this, `${fn.node.id}Throttles`, {
+        alarmName: `${fn.functionName}-throttles`,
+        metric: fn.metricThrottles({ period: Duration.minutes(1) }),
+        threshold: 1,
+        evaluationPeriods: 1,
+        comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: TreatMissingData.NOT_BREACHING,
+      }).addAlarmAction(new SnsAction(alarmTopic));
+
+      // Lambda duration (e.g. > 80% of timeout)
+      const timeoutMs = fn.timeout?.toMilliseconds() ?? 30000;
+      new Alarm(this, `${fn.node.id}Duration`, {
+        alarmName: `${fn.functionName}-duration`,
+        metric: fn.metricDuration({ period: Duration.minutes(1), statistic: Stats.P99 }),
+        threshold: timeoutMs * 0.8,
+        evaluationPeriods: 2,
+        comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: TreatMissingData.NOT_BREACHING,
+      }).addAlarmAction(new SnsAction(alarmTopic));
+    }
+
+    // SQS queue depth (optional)
+    for (const queue of props.queues ?? []) {
+      new Alarm(this, `QueueDepth-${queue.node.id}`, {
+        alarmName: `sqs-${queue.queueName}-depth`,
+        metric: new Metric({
+          namespace: "AWS/SQS",
+          metricName: "ApproximateNumberOfMessagesVisible",
+          dimensionsMap: { QueueName: queue.queueName },
+          period: Duration.minutes(5),
+          statistic: Stats.SUM,
+        }),
+        threshold: 1000,
+        evaluationPeriods: 2,
+        comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: TreatMissingData.NOT_BREACHING,
+      }).addAlarmAction(new SnsAction(alarmTopic));
+    }
+  }
+}
+```
+
+## CDK App Entry Point
+
+```typescript
+// cdk/bin/app.ts
+
+import "source-map-support/register";
+import { App, Environment } from "aws-cdk-lib";
+import { DataStack } from "../lib/stacks/data-stack";
+import { MessagingStack } from "../lib/stacks/messaging-stack";
+import { ApiStack } from "../lib/stacks/api-stack";
+import { ProcessingStack } from "../lib/stacks/processing-stack";
+
+const app = new App();
+
+const env: Environment = {
+  account: process.env.CDK_DEFAULT_ACCOUNT,
+  region: process.env.CDK_DEFAULT_REGION ?? "us-east-1",
+};
+
+// Data layer
+const dataStack = new DataStack(app, "RealEstateData", { env });
+
+// Messaging layer
+const messagingStack = new MessagingStack(app, "RealEstateMessaging", { env });
+
+// API layer
+const apiStack = new ApiStack(app, "RealEstateApi", {
+  env,
+  dataTable: dataStack.dataTable,
+  idempotencyTable: dataStack.idempotencyTable,
+  databaseSecret: dataStack.rdsProxy.secret,
+  rdsProxyEndpoint: dataStack.rdsProxy.proxy.endpoint,
+  opensearchEndpoint: dataStack.opensearchDomain.domainEndpoint,
+});
+
+// Processing layer
+new ProcessingStack(app, "RealEstateProcessing", {
+  env,
+  propertyEventsLadder: messagingStack.propertyEventsLadder,
+  listingEventsLadder: messagingStack.listingEventsLadder,
+  dataTable: dataStack.dataTable,
+  opensearchEndpoint: dataStack.opensearchDomain.domainEndpoint,
+});
+
+app.synth();
+```
+
+## Conventions
+
+- Use constructs for reusable infrastructure patterns
+- Enable `reportBatchItemFailures` for all SQS event sources
+- Use ARM_64 architecture for cost savings
+- Enable X-Ray tracing by default
+- Set appropriate timeout and memory for each function
+- Use PAY_PER_REQUEST for DynamoDB (Lambda workloads are spiky)
+- Always set TTL on idempotency table
+- Use RDS Proxy for all Lambda → PostgreSQL connections
+- Separate stacks by concern (data, API, messaging, processing)
+
+## Anti-Patterns
+
+- ❌ Missing `reportBatchItemFailures` on SQS sources
+- ❌ Hardcoded secrets in environment variables
+- ❌ Provisioned capacity for spiky Lambda workloads
+- ❌ Missing retry queues (direct to DLQ)
+- ❌ Overly permissive IAM policies
+- ❌ Not using ARM architecture
+- ❌ Missing reserved concurrency for DB-connected Lambdas
+- ❌ Synchronous cross-stack dependencies
+
+**See also:** `lambda-handlers.mdc`, `sqs-processing.mdc`, `dynamodb.mdc`, `rds-proxy.mdc`, `api-gateway-http-api.mdc`, `monitoring.mdc`
+
+**See also:** `cdk-infrastructure-queues.mdc`, `monitoring.mdc`

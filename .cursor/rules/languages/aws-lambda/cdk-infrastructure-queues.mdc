@@ -1,0 +1,216 @@
+---
+description: "CDK infrastructure - overview, project structure, SQS retry ladder pattern"
+---
+
+# CDK Infrastructure
+
+## Overview
+
+AWS CDK (Cloud Development Kit) enables infrastructure-as-code in TypeScript. This guide covers production-ready patterns for real estate Lambda applications.
+
+**Note:** As of 2025, the CDK CLI and Construct Library have separate version lines. The CLI uses 2.1000+ numbering; the construct library (e.g. `aws-cdk-lib`) continues 2.x (e.g. 2.238+). Both work together—use `aws-cdk-lib@^2.238.0` and the latest CLI.
+
+## Project Structure
+
+```
+cdk/
+├── bin/
+│   └── app.ts                    # CDK app entry point
+├── lib/
+│   ├── stacks/
+│   │   ├── api-stack.ts          # API Gateway + Lambda handlers
+│   │   ├── messaging-stack.ts    # SNS, SQS, retry queues
+│   │   ├── data-stack.ts         # DynamoDB, RDS, OpenSearch
+│   │   └── monitoring-stack.ts   # CloudWatch, alarms
+│   └── constructs/
+│       ├── sqs-retry-ladder.ts   # Reusable retry queue pattern
+│       ├── lambda-function.ts    # Standard Lambda configuration
+│       └── dynamodb-table.ts     # Table with GSIs
+├── cdk.json
+├── tsconfig.json
+└── package.json
+```
+
+## Dependencies
+
+```bash
+pnpm add -D aws-cdk-lib constructs @types/node esbuild
+```
+
+## SQS Retry Ladder Pattern
+
+### Construct Definition
+
+```typescript
+// cdk/lib/constructs/sqs-retry-ladder.ts
+
+import { Construct } from "constructs";
+import { Duration, RemovalPolicy } from "aws-cdk-lib";
+import { Queue, DeadLetterQueue } from "aws-cdk-lib/aws-sqs";
+
+export interface RetryLadderProps {
+  /**
+   * Base name for the queues
+   */
+  queueName: string;
+  
+  /**
+   * Delay configuration for each retry tier
+   */
+  retryDelays?: {
+    tier1Seconds: number;
+    tier2Seconds: number;
+    tier3Seconds: number;
+  };
+  
+  /**
+   * Max receive count before moving to next tier
+   */
+  maxReceiveCount?: number;
+  
+  /**
+   * Message retention period
+   */
+  retentionPeriod?: Duration;
+  
+  /**
+   * Visibility timeout for processing
+   */
+  visibilityTimeout?: Duration;
+}
+
+export class SqsRetryLadder extends Construct {
+  public readonly mainQueue: Queue;
+  public readonly retryQueue1: Queue;
+  public readonly retryQueue2: Queue;
+  public readonly retryQueue3: Queue;
+  public readonly deadLetterQueue: Queue;
+
+  constructor(scope: Construct, id: string, props: RetryLadderProps) {
+    super(scope, id);
+
+    const retryDelays = props.retryDelays ?? {
+      tier1Seconds: 30,
+      tier2Seconds: 300, // 5 minutes
+      tier3Seconds: 1800, // 30 minutes
+    };
+    const maxReceiveCount = props.maxReceiveCount ?? 3;
+    const retentionPeriod = props.retentionPeriod ?? Duration.days(14);
+    const visibilityTimeout = props.visibilityTimeout ?? Duration.seconds(30);
+
+    // Dead Letter Queue (final destination for failed messages)
+    this.deadLetterQueue = new Queue(this, "DLQ", {
+      queueName: `${props.queueName}-dlq`,
+      retentionPeriod: Duration.days(14),
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+
+    // Retry Queue 3 → DLQ
+    this.retryQueue3 = new Queue(this, "RetryQueue3", {
+      queueName: `${props.queueName}-retry-3`,
+      deliveryDelay: Duration.seconds(retryDelays.tier3Seconds),
+      visibilityTimeout,
+      retentionPeriod,
+      deadLetterQueue: {
+        queue: this.deadLetterQueue,
+        maxReceiveCount,
+      },
+    });
+
+    // Retry Queue 2 → Retry Queue 3
+    this.retryQueue2 = new Queue(this, "RetryQueue2", {
+      queueName: `${props.queueName}-retry-2`,
+      deliveryDelay: Duration.seconds(retryDelays.tier2Seconds),
+      visibilityTimeout,
+      retentionPeriod,
+      deadLetterQueue: {
+        queue: this.retryQueue3,
+        maxReceiveCount,
+      },
+    });
+
+    // Retry Queue 1 → Retry Queue 2
+    this.retryQueue1 = new Queue(this, "RetryQueue1", {
+      queueName: `${props.queueName}-retry-1`,
+      deliveryDelay: Duration.seconds(retryDelays.tier1Seconds),
+      visibilityTimeout,
+      retentionPeriod,
+      deadLetterQueue: {
+        queue: this.retryQueue2,
+        maxReceiveCount,
+      },
+    });
+
+    // Main Queue → Retry Queue 1
+    this.mainQueue = new Queue(this, "MainQueue", {
+      queueName: props.queueName,
+      visibilityTimeout,
+      retentionPeriod,
+      deadLetterQueue: {
+        queue: this.retryQueue1,
+        maxReceiveCount,
+      },
+    });
+  }
+
+  /**
+   * Returns all queue URLs as environment variables
+   */
+  public getEnvironmentVariables(): Record<string, string> {
+    return {
+      MAIN_QUEUE_URL: this.mainQueue.queueUrl,
+      RETRY_QUEUE_1_URL: this.retryQueue1.queueUrl,
+      RETRY_QUEUE_2_URL: this.retryQueue2.queueUrl,
+      RETRY_QUEUE_3_URL: this.retryQueue3.queueUrl,
+      DLQ_URL: this.deadLetterQueue.queueUrl,
+    };
+  }
+}
+```
+
+### Usage
+
+```typescript
+// cdk/lib/stacks/messaging-stack.ts
+
+import { Stack, StackProps } from "aws-cdk-lib";
+import { Construct } from "constructs";
+import { SqsRetryLadder } from "../constructs/sqs-retry-ladder";
+
+export class MessagingStack extends Stack {
+  public readonly propertyEventsLadder: SqsRetryLadder;
+  public readonly listingEventsLadder: SqsRetryLadder;
+  public readonly leadEventsLadder: SqsRetryLadder;
+
+  constructor(scope: Construct, id: string, props?: StackProps) {
+    super(scope, id, props);
+
+    this.propertyEventsLadder = new SqsRetryLadder(this, "PropertyEvents", {
+      queueName: "property-events",
+      retryDelays: {
+        tier1Seconds: 30,
+        tier2Seconds: 300,
+        tier3Seconds: 1800,
+      },
+      visibilityTimeout: Duration.seconds(60),
+    });
+
+    this.listingEventsLadder = new SqsRetryLadder(this, "ListingEvents", {
+      queueName: "listing-events",
+      retryDelays: {
+        tier1Seconds: 60,
+        tier2Seconds: 600,
+        tier3Seconds: 3600,
+      },
+      visibilityTimeout: Duration.seconds(120),
+    });
+
+    this.leadEventsLadder = new SqsRetryLadder(this, "LeadEvents", {
+      queueName: "lead-events",
+    });
+  }
+}
+```
+
+
+**See also:** `cdk-infrastructure-lambda.mdc`, `cdk-infrastructure-data.mdc`, `cdk-infrastructure-monitoring.mdc`

@@ -1,6 +1,5 @@
-﻿---
+---
 description: "BFF (Backend-For-Frontend) architectural patterns - Clean Architecture, Vertical Slice, CQRS"
-globs: ["**/bff/**/*.java", "**/*BffController*.java", "**/*Aggregation*.java", "**/*Facade*.java"]
 ---
 
 # BFF Architecture Patterns

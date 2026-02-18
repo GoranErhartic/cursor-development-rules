@@ -1,6 +1,5 @@
 ---
 description: "Input validation and sanitization rules - SQL injection, XSS, path traversal prevention"
-globs: ["**/*Controller*.java", "**/*Service*.java", "**/*Validator*.java"]
 ---
 
 # Input Sanitization

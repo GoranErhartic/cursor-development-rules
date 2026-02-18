@@ -1,0 +1,29 @@
+---
+description: "S3 presigned URLs - upload flow, allowed types, security, key generation"
+---
+
+# S3 Presigned URLs (Upload)
+
+## Security
+
+- **Allowed types:** Whitelist MIME types and extensions; enforce max size per type; reject unknown types
+- **Expiration:** Short (5–15 min) for upload URLs
+- **Key generation:** Server-generated key (e.g. `uploads/{userId}/{uuid}/{filename}`); sanitize client filename; no path traversal
+- **Validation:** After upload, validate content-type (e.g. with file-type) and size server-side; do not trust client headers only
+- **Bucket:** Private; access only via presigned URL or Lambda with IAM
+
+## Implementation
+
+- **Client:** `@aws-sdk/client-s3`, `@aws-sdk/s3-request-presigner`; `PutObjectCommand` with Key, ContentType, ContentLength (optional but recommended); sign with `getSignedUrl(client, command, { expiresIn })`
+- **Handler:** Validate user/auth; check requested ContentType and size against allowlist; generate key; return presigned URL and key to client
+- **Post-upload:** Client notifies API (key, optional hash); API validates object in S3 (headObject, content-type/size) and then processes
+
+## Conventions
+
+- Always allowlist types and size; short expiry; server-generated keys; post-upload validation
+
+## Anti-Patterns
+
+- Client-supplied key without sanitization; no MIME/size validation; long expiry; public bucket
+
+**See also:** `s3-presigned-urls-validation.mdc`, `s3-presigned-urls-cdk-client.mdc`, `security.mdc`

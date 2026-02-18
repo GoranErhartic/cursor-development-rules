@@ -1,0 +1,97 @@
+---
+description: "React Error Boundaries - class component, getDerivedStateFromError, componentDidCatch, fallback UI, granular boundaries"
+---
+
+# Error Boundaries
+
+Error Boundaries catch JavaScript errors in the component tree and display a fallback UI. They do not catch errors in event handlers, async code, or server-side rendering. Use class components (no hook equivalent).
+
+## Basic Error Boundary
+
+```typescript
+import React, { Component, ErrorInfo, ReactNode } from 'react';
+
+interface ErrorBoundaryProps {
+  children: ReactNode;
+  fallback?: ReactNode;
+  onError?: (error: Error, errorInfo: ErrorInfo) => void;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('Error caught by boundary:', error, errorInfo);
+    this.props.onError?.(error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback || (
+        <ErrorFallback error={this.state.error} reset={() => this.setState({ hasError: false, error: null })} />
+      );
+    }
+    return this.props.children;
+  }
+}
+```
+
+## Error Fallback Component
+
+```typescript
+interface ErrorFallbackProps {
+  error: Error | null;
+  reset: () => void;
+}
+
+export function ErrorFallback({ error, reset }: ErrorFallbackProps) {
+  return (
+    <div className="error-fallback">
+      <h2>Something went wrong</h2>
+      <details>
+        <summary>Error details</summary>
+        <pre>{error?.message}</pre>
+        {import.meta.env.DEV && <pre>{error?.stack}</pre>}
+      </details>
+      <button onClick={reset}>Try again</button>
+    </div>
+  );
+}
+```
+
+## Granular Error Boundaries
+
+Place boundaries around route segments or features so one failure does not take down the whole app.
+
+```typescript
+function App() {
+  return (
+    <ErrorBoundary fallback={<FullPageError />}>
+      <Header />
+      <ErrorBoundary fallback={<SidebarError />}>
+        <Sidebar />
+      </ErrorBoundary>
+      <main>
+        <ErrorBoundary fallback={<ContentError />}>
+          <Outlet />
+        </ErrorBoundary>
+      </main>
+      <Footer />
+    </ErrorBoundary>
+  );
+}
+```
+
+**See also:** `error-handling.mdc`, `../../patterns/error-handling.mdc`

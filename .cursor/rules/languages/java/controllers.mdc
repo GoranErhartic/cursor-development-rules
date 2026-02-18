@@ -1,6 +1,5 @@
-﻿---
+---
 description: "Spring REST controller conventions - @RestController, ResponseEntity, OpenAPI, CQRS Dispatcher"
-globs: ["**/*Controller*.java", "**/controller/**/*.java", "**/web/**/*.java"]
 ---
 
 # API Controller Conventions

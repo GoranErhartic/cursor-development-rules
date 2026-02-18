@@ -1,0 +1,92 @@
+---
+description: "DynamoDB Streams - stream handler pattern, Lambda event source, INSERT/MODIFY/REMOVE processing, OpenSearch sync, unmarshall"
+---
+
+# DynamoDB Streams
+
+Use DynamoDB Streams for event-driven processing (e.g. syncing to OpenSearch, analytics, cache invalidation). Enable streams on the table in CDK and add a Lambda event source mapping.
+
+## Stream Handler for OpenSearch Sync
+
+```typescript
+// src/functions/sync-to-opensearch/handler.ts
+
+import type { DynamoDBStreamHandler, DynamoDBRecord } from "aws-lambda";
+import { unmarshall } from "@aws-sdk/util-dynamodb";
+import type { AttributeValue } from "@aws-sdk/client-dynamodb";
+import { logger } from "@/shared/logger";
+import { opensearchClient } from "@/shared/clients/opensearch";
+
+export const handler: DynamoDBStreamHandler = async (event) => {
+  const bulkOperations: object[] = [];
+
+  for (const record of event.Records) {
+    const operation = processRecord(record);
+    if (operation) {
+      bulkOperations.push(...operation);
+    }
+  }
+
+  if (bulkOperations.length > 0) {
+    await opensearchClient.bulk({ body: bulkOperations });
+    logger.info({ operationCount: bulkOperations.length / 2 }, "Bulk indexed to OpenSearch");
+  }
+};
+
+function processRecord(record: DynamoDBRecord): object[] | null {
+  const eventName = record.eventName;
+  const newImage = record.dynamodb?.NewImage;
+  const oldImage = record.dynamodb?.OldImage;
+
+  if (!newImage && !oldImage) {
+    return null;
+  }
+
+  const item = newImage
+    ? unmarshall(newImage as Record<string, AttributeValue>)
+    : unmarshall(oldImage as Record<string, AttributeValue>);
+
+  if (item.entityType !== "Listing") {
+    return null;
+  }
+
+  const documentId = `${item.propertyId}-${item.listingId}`;
+
+  switch (eventName) {
+    case "INSERT":
+    case "MODIFY":
+      return [
+        { index: { _index: "listings", _id: documentId } },
+        {
+          propertyId: item.propertyId,
+          listingId: item.listingId,
+          agentId: item.agentId,
+          price: item.price,
+          listingType: item.listingType,
+          status: item.status,
+          description: item.description,
+          photos: item.photos,
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+        },
+      ];
+
+    case "REMOVE":
+      return [
+        { delete: { _index: "listings", _id: documentId } },
+      ];
+
+    default:
+      return null;
+  }
+}
+```
+
+## Conventions
+
+- Filter by `entityType` or key prefix in the handler to process only relevant entities
+- Use batch/bulk APIs (e.g. OpenSearch bulk) to avoid per-record round trips
+- Handle INSERT, MODIFY, REMOVE; use NewImage or OldImage as needed
+- Prefer idempotent processing; streams may deliver the same record more than once
+
+**See also:** `dynamodb.mdc`, `opensearch.mdc`, `lambda-handlers.mdc`

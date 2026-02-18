@@ -1,6 +1,5 @@
 ---
 description: "ASP.NET Core controller conventions - routing, ActionResult, API design, HTTP methods"
-globs: ["**/*Controller*.cs", "**/Controllers/**/*.cs", "**/Endpoints/**/*.cs"]
 ---
 
 # API Controller Conventions
@@ -68,4 +67,4 @@ public async Task<ActionResult<UserDto>> Create(CreateUserCommand command)
 public class UsersController : ControllerBase
 ```
 
-**See also:** `request-validation.mdc`, `error-handling.mdc`
+**See also:** `validation.mdc`, `error-handling.mdc`

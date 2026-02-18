@@ -1,0 +1,34 @@
+---
+description: "SQS Lambda processing - partial batch failures (batchItemFailures), retry ladder with DLQ, message visibility timeout, SQS event source mapping, ReportBatchItemFailures"
+---
+
+# SQS Processing Patterns
+
+## Critical Rule
+
+**Return only failed message IDs** in `batchItemFailures`, not the entire batch. Lambda will retry only those messages.
+
+## Handler Signature
+
+- `SQSHandler`; return type `Promise<SQSBatchResponse>`; `return { batchItemFailures: SQSBatchItemFailure[] }` where each entry is `{ itemIdentifier: record.messageId }`
+
+## Processing Pattern
+
+- Parse `event.Records`; for each record parse body (JSON); validate with Zod (or similar); on success process and do not add to batchItemFailures; on catch push `{ itemIdentifier: record.messageId }` and continue (or break for FIFO)
+- **Concurrent:** `Promise.all(Records.map(...))` when order does not matter
+- **Sequential:** For FIFO or order-sensitive, process in loop; after first failure you may push remaining messageIds to batchItemFailures to preserve order
+- Add correlationId from message envelope to logger/tracer; create X-Ray subsegment per message if needed
+
+## Message Envelope
+
+- Prefer envelope: `{ metadata: { correlationId }, body: payload }`; parse once, validate payload, propagate correlationId to logger and downstream
+
+## Conventions
+
+- Always return batchItemFailures for failed items; log total/failed/succeeded; use idempotency for state-changing work; validate message shape at entry
+
+## Anti-Patterns
+
+- Returning full batch on partial failure; throwing without adding to batchItemFailures; no validation of message body; ignoring correlationId
+
+**See also:** `idempotency.mdc`, `error-handling.mdc`, `logging-setup.mdc`, `powertools-batch.mdc`

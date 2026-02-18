@@ -1,0 +1,296 @@
+---
+description: "Lambda handler structure - middy v7 middleware chain, cold start optimization, memory/timeout tuning, handler factory pattern, API Gateway v1/v2 event types, http-cors middleware, powertools injection"
+---
+
+# Lambda Handler Patterns
+
+## Overview
+
+AWS Lambda functions require specific patterns to handle cold starts, memory constraints, timeouts, and concurrent executions efficiently.
+
+## Dependencies
+
+Use Middy v7 and Node.js 22 runtime. Middy v7 has breaking changes from v5 (see [upgrade guide](https://middy.js.org/docs/intro/upgrade)).
+
+```bash
+pnpm add @middy/core@^7 @middy/http-json-body-parser@^7 @middy/http-error-handler@^7 @middy/input-output-logger@^7 @middy/http-cors@^7
+pnpm add @aws-lambda-powertools/logger @aws-lambda-powertools/tracer @aws-lambda-powertools/metrics
+pnpm add -D @types/aws-lambda esbuild
+```
+
+## Base Handler Structure
+
+### Simple Handler
+
+```typescript
+// src/functions/get-property/handler.ts
+
+import type { APIGatewayProxyHandler, APIGatewayProxyResult } from "aws-lambda";
+import { logger } from "@/shared/logger";
+
+export const handler: APIGatewayProxyHandler = async (event, context) => {
+  // Disable waiting for event loop to empty (faster cold starts)
+  context.callbackWaitsForEmptyEventLoop = false;
+
+  const propertyId = event.pathParameters?.propertyId;
+
+  if (!propertyId) {
+    return {
+      statusCode: 400,
+      body: JSON.stringify({ message: "Property ID is required" }),
+    };
+  }
+
+  try {
+    const property = await propertyService.findById(propertyId);
+
+    if (!property) {
+      return {
+        statusCode: 404,
+        body: JSON.stringify({ message: "Property not found" }),
+      };
+    }
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify(property),
+    };
+  } catch (error) {
+    logger.error({ err: error, propertyId }, "Failed to get property");
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ message: "Internal server error" }),
+    };
+  }
+};
+```
+
+## Middy Middleware Pattern (Recommended)
+
+### Middleware Stack Setup
+
+```typescript
+// src/shared/middleware/index.ts
+
+import middy from "@middy/core";
+import httpJsonBodyParser from "@middy/http-json-body-parser";
+import httpErrorHandler from "@middy/http-error-handler";
+import inputOutputLogger from "@middy/input-output-logger";
+import httpCors from "@middy/http-cors";
+import { injectLambdaContext } from "@aws-lambda-powertools/logger/middleware";
+import { captureLambdaHandler } from "@aws-lambda-powertools/tracer/middleware";
+import { logger } from "@/shared/logger";
+import { tracer } from "@/shared/tracer";
+import { correlationIdMiddleware } from "./correlation-id";
+import { validationMiddleware } from "./validation";
+
+export function createHandler<TEvent, TResult>(
+  handler: (event: TEvent, context: Context) => Promise<TResult>
+) {
+  return middy(handler)
+    .use(injectLambdaContext(logger, { clearState: true }))
+    .use(captureLambdaHandler(tracer))
+    .use(correlationIdMiddleware())
+    .use(httpCors({ origin: "*", credentials: true })) // Real estate web app: allow frontend origin
+    .use(inputOutputLogger({
+      logger: (request) => logger.debug(request),
+      awsContext: true,
+    }))
+    .use(httpJsonBodyParser())
+    .use(httpErrorHandler({ logger: (error) => logger.error({ err: error }) }));
+}
+```
+
+### Handler with Middleware
+
+```typescript
+// src/functions/create-listing/handler.ts
+
+import type { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from "aws-lambda";
+import { createHandler } from "@/shared/middleware";
+import { createListingSchema, type CreateListingRequest } from "./schema";
+import { listingService } from "@/services/listing.service";
+import { logger } from "@/shared/logger";
+
+interface ParsedEvent extends Omit<APIGatewayProxyEvent, "body"> {
+  body: CreateListingRequest;
+}
+
+async function baseHandler(
+  event: ParsedEvent,
+  context: Context
+): Promise<APIGatewayProxyResult> {
+  context.callbackWaitsForEmptyEventLoop = false;
+
+  const { propertyId, agentId, price, listingType } = event.body;
+
+  logger.info({ propertyId, agentId }, "Creating listing");
+
+  const result = await listingService.createListing({
+    propertyId,
+    agentId,
+    price,
+    listingType,
+  });
+
+  if (!result.success) {
+    return {
+      statusCode: result.error.statusCode ?? 400,
+      body: JSON.stringify({
+        type: `https://api.example.com/errors/${result.error.code.toLowerCase()}`,
+        title: result.error.code,
+        status: result.error.statusCode ?? 400,
+        detail: result.error.message,
+      }),
+    };
+  }
+
+  return {
+    statusCode: 201,
+    body: JSON.stringify(result.data),
+  };
+}
+
+export const handler = createHandler(baseHandler);
+```
+
+### Custom Validation Middleware
+
+```typescript
+// src/shared/middleware/validation.ts
+
+import type { MiddlewareObj } from "@middy/core";
+import type { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
+import { z, type ZodSchema } from "zod";
+import { createHttpError } from "@middy/util";
+
+export function validationMiddleware<T extends ZodSchema>(
+  schema: T
+): MiddlewareObj<APIGatewayProxyEvent, APIGatewayProxyResult> {
+  return {
+    before: async (request) => {
+      const result = schema.safeParse(request.event.body);
+
+      if (!result.success) {
+        throw createHttpError(400, "Validation failed", {
+          cause: result.error.flatten().fieldErrors,
+        });
+      }
+
+      request.event.body = result.data;
+    },
+  };
+}
+```
+
+### Correlation ID Middleware
+
+```typescript
+// src/shared/middleware/correlation-id.ts
+
+import type { MiddlewareObj } from "@middy/core";
+import type { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
+import { randomUUID } from "node:crypto";
+import { logger } from "@/shared/logger";
+
+export function correlationIdMiddleware(): MiddlewareObj<
+  APIGatewayProxyEvent,
+  APIGatewayProxyResult
+> {
+  return {
+    before: async (request) => {
+      const correlationId =
+        request.event.headers["x-correlation-id"] ??
+        request.event.headers["X-Correlation-Id"] ??
+        randomUUID();
+
+      logger.appendKeys({ correlationId });
+      request.internal = request.internal ?? {};
+      request.internal.correlationId = correlationId;
+    },
+    after: async (request) => {
+      if (request.response) {
+        request.response.headers = {
+          ...request.response.headers,
+          "X-Correlation-Id": request.internal?.correlationId,
+        };
+      }
+    },
+  };
+}
+```
+
+## Cold Start Optimization
+
+### Lazy Initialization
+
+```typescript
+// src/shared/clients/dynamodb.ts
+
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
+
+// Initialize outside handler (reused across invocations)
+let docClient: DynamoDBDocumentClient | undefined;
+
+export function getDynamoDBClient(): DynamoDBDocumentClient {
+  if (!docClient) {
+    const client = new DynamoDBClient({
+      // Use AWS_REGION from environment
+      maxAttempts: 3,
+    });
+
+    docClient = DynamoDBDocumentClient.from(client, {
+      marshallOptions: {
+        removeUndefinedValues: true,
+        convertEmptyValues: false,
+      },
+    });
+  }
+
+  return docClient;
+}
+```
+
+### Warm-Up Pattern
+
+```typescript
+// src/functions/api/handler.ts
+
+import { getDynamoDBClient } from "@/shared/clients/dynamodb";
+import { getOpenSearchClient } from "@/shared/clients/opensearch";
+
+// Initialize clients at module load (during cold start)
+const dynamodb = getDynamoDBClient();
+const opensearch = getOpenSearchClient();
+
+export const handler = async (event: APIGatewayProxyEvent) => {
+  // Clients are already initialized
+  // ...
+};
+```
+
+### Provisioned Concurrency for Critical Paths
+
+```typescript
+// cdk/lib/stacks/api-stack.ts
+
+const criticalHandler = new NodejsFunction(this, "CriticalHandler", {
+  entry: "src/functions/critical/handler.ts",
+  handler: "handler",
+  runtime: Runtime.NODEJS_22_X,
+  memorySize: 1024,
+  timeout: Duration.seconds(10),
+});
+
+// Add provisioned concurrency
+const version = criticalHandler.currentVersion;
+const alias = new Alias(this, "CriticalAlias", {
+  aliasName: "live",
+  version,
+  provisionedConcurrentExecutions: 5, // Keep 5 instances warm
+});
+```
+
+**See also:** `error-handling.mdc`, `api-gateway-http-api.mdc`, `sqs-processing.mdc`
+

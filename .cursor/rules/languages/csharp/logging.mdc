@@ -1,6 +1,5 @@
 ---
 description: "Serilog structured logging - configuration, enrichers, correlation IDs, log levels"
-globs: ["**/Program.cs", "**/Logging/**/*.cs", "**/*Logger*.cs", "**/appsettings*.json"]
 ---
 
 # Serilog Structured Logging

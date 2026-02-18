@@ -1,6 +1,5 @@
 ---
 description: "NuGet dependencies - Central Package Management, versioning, security, licensing"
-globs: ["**/*.csproj", "**/Directory.Build.props", "**/Directory.Packages.props", "**/nuget.config"]
 ---
 
 # Dependencies & NuGet

@@ -1,5 +1,5 @@
 ---
-description: "Input validation and sanitization - SQL injection, XSS, path traversal prevention concepts"
+description: "Input sanitization concepts - validation vs sanitization, SQL injection prevention (parameterized queries), XSS prevention (output encoding), path traversal, command injection, LDAP injection, file upload validation, allowlists over blocklists"
 ---
 
 # Input Sanitization & Validation

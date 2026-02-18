@@ -1,0 +1,120 @@
+---
+description: "S3 presigned URLs - download flow, getObject, signed download"
+---
+## Presigned URL for Download
+
+### Download URL Generator
+
+```typescript
+// src/shared/s3/presigned-download.ts
+
+import { S3Client, GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { Result } from "@/shared/result";
+import { logger } from "@/shared/logger";
+
+const s3Client = new S3Client({});
+
+const BUCKET_NAME = process.env.UPLOADS_BUCKET_NAME!;
+const URL_EXPIRATION_SECONDS = 900; // 15 minutes
+
+export interface DownloadUrlRequest {
+  key: string;
+  userId: string;
+  fileName?: string; // Optional: override download filename
+}
+
+export interface DownloadUrlResponse {
+  downloadUrl: string;
+  contentType: string;
+  contentLength: number;
+  expiresAt: string;
+}
+
+export async function generateDownloadUrl(
+  request: DownloadUrlRequest
+): Promise<Result<DownloadUrlResponse>> {
+  // 1. Validate key format (prevent path traversal)
+  if (!isValidS3Key(request.key)) {
+    return Result.fail({
+      code: "INVALID_KEY",
+      message: "Invalid file key",
+      statusCode: 400,
+      isRetryable: false,
+    });
+  }
+
+  try {
+    // 2. Check if object exists and get metadata
+    const headCommand = new HeadObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: request.key,
+    });
+
+    const headResponse = await s3Client.send(headCommand);
+
+    // 3. Verify user has access (check metadata)
+    // In production, implement proper authorization
+    const uploadedBy = headResponse.Metadata?.["uploaded-by"];
+    // TODO: Check if userId has permission to access this file
+
+    // 4. Generate presigned URL
+    const getCommand = new GetObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: request.key,
+      ResponseContentDisposition: request.fileName
+        ? `attachment; filename="${sanitizeFilename(request.fileName)}"`
+        : undefined,
+    });
+
+    const downloadUrl = await getSignedUrl(s3Client, getCommand, {
+      expiresIn: URL_EXPIRATION_SECONDS,
+    });
+
+    const expiresAt = new Date(Date.now() + URL_EXPIRATION_SECONDS * 1000);
+
+    logger.info({
+      key: request.key,
+      userId: request.userId,
+    }, "Generated presigned download URL");
+
+    return Result.ok({
+      downloadUrl,
+      contentType: headResponse.ContentType ?? "application/octet-stream",
+      contentLength: headResponse.ContentLength ?? 0,
+      expiresAt: expiresAt.toISOString(),
+    });
+  } catch (error) {
+    if ((error as any).name === "NotFound") {
+      return Result.fail({
+        code: "FILE_NOT_FOUND",
+        message: "File not found",
+        statusCode: 404,
+        isRetryable: false,
+      });
+    }
+    throw error;
+  }
+}
+
+function isValidS3Key(key: string): boolean {
+  // Prevent path traversal and invalid characters
+  if (key.includes("..") || key.startsWith("/")) {
+    return false;
+  }
+
+  // Must match expected pattern: entityType/entityId/date/uuid.ext
+  const pattern = /^(property|listing|document)\/[a-f0-9-]+\/\d{4}\/\d{2}\/\d{2}\/[a-f0-9-]+\.[a-z0-9]+$/;
+  return pattern.test(key);
+}
+
+function sanitizeFilename(filename: string): string {
+  return filename
+    .replace(/[^\w\s.-]/g, "")
+    .replace(/\s+/g, "_")
+    .slice(0, 255);
+}
+```
+
+
+**See also:** `s3-presigned-urls-upload.mdc`, `s3-presigned-urls-validation.mdc`

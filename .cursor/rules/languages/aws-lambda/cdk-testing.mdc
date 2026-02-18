@@ -1,0 +1,154 @@
+---
+description: "CDK testing - Template assertions, snapshot tests, hasResourceProperties, custom construct tests"
+---
+
+# CDK Testing
+
+## Overview
+
+Test CDK stacks and constructs with `aws-cdk-lib/assertions`. Use `Template.fromStack()` to inspect synthesized CloudFormation and assert on resources. Use snapshot tests for regression safety.
+
+## Dependencies
+
+```bash
+pnpm add -D aws-cdk-lib vitest
+```
+
+## Template Assertions
+
+```typescript
+// cdk/lib/stacks/api-stack.test.ts
+
+import { describe, it, expect } from "vitest";
+import { App } from "aws-cdk-lib";
+import { Template } from "aws-cdk-lib/assertions";
+import { ApiStack } from "./api-stack";
+
+describe("ApiStack", () => {
+  it("should create a REST API and Lambda functions", () => {
+    const app = new App();
+    const stack = new ApiStack(app, "TestStack", {
+      dataTable: createMockTable(),
+      idempotencyTable: createMockTable(),
+      databaseSecret: createMockSecret(),
+      rdsProxyEndpoint: "proxy.example.com",
+      opensearchEndpoint: "https://search.example.com",
+    });
+
+    const template = Template.fromStack(stack);
+
+    template.resourceCountIs("AWS::ApiGateway::RestApi", 1);
+    template.resourceCountIs("AWS::Lambda::Function", 3);
+
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      Runtime: "nodejs22.x",
+      Handler: "index.handler",
+      MemorySize: 512,
+      Timeout: 30,
+    });
+
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      Environment: {
+        Variables: expect.objectContaining({
+          DYNAMODB_TABLE_NAME: expect.any(String),
+        }),
+      },
+    });
+  });
+});
+
+function createMockTable() {
+  return {} as any; // Use actual Table from a test stack or @aws-cdk-lib/aws-dynamodb
+}
+function createMockSecret() {
+  return {} as any;
+}
+```
+
+## Fine-Grained Assertions
+
+```typescript
+const template = Template.fromStack(stack);
+
+// At least one Lambda with these properties
+template.hasResourceProperties("AWS::Lambda::Function", {
+  Runtime: "nodejs22.x",
+  Architectures: ["arm64"],
+});
+
+// SQS event source with reportBatchItemFailures
+template.hasResourceProperties("AWS::Lambda::EventSourceMapping", {
+  EventSourceArn: expect.any(String),
+  FunctionName: expect.any(String),
+  BatchSize: 10,
+});
+
+// DynamoDB table with TTL
+template.hasResourceProperties("AWS::DynamoDB::Table", {
+  BillingMode: "PAY_PER_REQUEST",
+  StreamSpecification: { StreamViewType: "NEW_AND_OLD_IMAGES" },
+});
+```
+
+## Snapshot Tests
+
+Capture the full template to catch unintended changes. Update snapshots explicitly (`vitest -u`).
+
+```typescript
+// cdk/lib/stacks/data-stack.test.ts
+
+import { describe, it, expect } from "vitest";
+import { App } from "aws-cdk-lib";
+import { Template } from "aws-cdk-lib/assertions";
+import { DataStack } from "./data-stack";
+
+describe("DataStack snapshot", () => {
+  it("matches snapshot", () => {
+    const app = new App();
+    const stack = new DataStack(app, "TestData", { env: { account: "123", region: "us-east-1" } });
+    const template = Template.fromStack(stack);
+    expect(template.toJSON()).toMatchSnapshot();
+  });
+});
+```
+
+## Testing Custom Constructs
+
+Test a construct in isolation by instantiating it inside a stack.
+
+```typescript
+// cdk/lib/constructs/sqs-retry-ladder.test.ts
+
+import { describe, it, expect } from "vitest";
+import { App, Stack } from "aws-cdk-lib";
+import { Template } from "aws-cdk-lib/assertions";
+import { SqsRetryLadder } from "./sqs-retry-ladder";
+
+describe("SqsRetryLadder", () => {
+  it("creates main queue, 3 retry queues, and DLQ", () => {
+    const app = new App();
+    const stack = new Stack(app, "Test");
+    new SqsRetryLadder(stack, "Ladder", { queueName: "test-queue" });
+
+    const template = Template.fromStack(stack);
+    template.resourceCountIs("AWS::SQS::Queue", 5);
+  });
+});
+```
+
+## Conventions
+
+- Use `Template.fromStack()` for all stack/construct tests
+- Prefer `hasResourceProperties` over raw template inspection
+- Add snapshot tests for critical stacks; review diff when updating
+- Mock cross-stack dependencies (tables, secrets) with minimal stubs or real nested stacks
+- Exclude `cdk.out` and `*.snapshot.json` from general lint/format if needed
+
+## Anti-Patterns
+
+- Asserting on exact logical IDs (fragile; use resource type and properties)
+- No tests for CDK code
+- Snapshot updates without review
+- Full integration deploy as the only “test” of CDK
+
+**See also:** `cdk-infrastructure-lambda.mdc`, `cdk-infrastructure-data.mdc`, `cdk-infrastructure-queues.mdc`, `testing.mdc`

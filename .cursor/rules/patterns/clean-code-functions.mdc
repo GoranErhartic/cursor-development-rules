@@ -1,0 +1,156 @@
+---
+description: "Clean code functions - method parameter design, guard clauses, single abstraction level, avoid boolean parameters, cognitive load reduction"
+---
+
+# Clean Code: Function Structure
+
+## Method Parameter Design
+
+### Avoid Boolean Parameters
+
+Boolean parameters hide intent at the call site. The reader cannot understand what `true` means without looking at the method signature.
+
+```
+// BAD - What does 'true' mean?
+processOrder(order, true)
+saveUser(user, false, true)
+
+// GOOD - Intent is clear from method name
+processOrder(order)
+processOrderWithNotification(order)
+
+saveUser(user)
+saveUserWithValidation(user)
+```
+
+**Exception:** Boolean parameters are acceptable when the method name makes the meaning obvious (e.g., `setVisible(true)`).
+
+### Limit Parameter Count
+
+- **Ideal:** 0-3 parameters
+- **Acceptable:** 4 parameters with clear purpose
+- **Refactor:** 5+ parameters — use a parameter object or builder pattern
+
+```
+// BAD - Too many parameters, easy to mix up
+createUser(name, email, age, department, role, isActive, sendWelcome)
+
+// GOOD - Parameter object groups related data
+createUser(CreateUserRequest request)
+```
+
+## Single Level of Abstraction
+
+Each function should operate at one level of abstraction. Don't mix high-level orchestration with low-level details.
+
+```
+// BAD - Mixed abstraction levels
+function processOrder(order) {
+    validateOrder(order)                           // High-level
+    const tax = order.subtotal * 0.0825            // Low-level detail
+    sendToFulfillment(order)                        // High-level
+    db.query("INSERT INTO audit_log...")           // Low-level detail
+}
+
+// GOOD - Consistent abstraction level
+function processOrder(order) {
+    validateOrder(order)
+    calculateTotals(order)
+    sendToFulfillment(order)
+    logOrderProcessed(order)
+}
+```
+
+## Keep Functions Short
+
+- Aim for ~20 lines (fits on one screen)
+- If a function requires scrolling, consider extracting parts
+- Each function should do one thing well
+
+## Guard Clauses First
+
+Validate inputs and handle edge cases at the top of the function. Return early to avoid deep nesting.
+
+```
+// BAD - Deep nesting
+function getDiscount(user) {
+    if (user != null) {
+        if (user.isActive) {
+            if (user.membershipYears > 5) {
+                return 0.20
+            }
+        }
+    }
+    return 0
+}
+
+// GOOD - Guard clauses with early returns
+function getDiscount(user) {
+    if (user == null) return 0
+    if (!user.isActive) return 0
+    if (user.membershipYears <= 5) return 0
+    
+    return 0.20
+}
+```
+
+## Avoid Deep Nesting
+
+- Maximum 2-3 levels of indentation
+- Use early returns to flatten control flow
+- Extract nested logic into separate functions
+
+## Cognitive Load Reduction
+
+### Readability Over Brevity
+
+Do not force one-liners or clever expressions. If a multi-line version is easier to scan and understand, prefer it.
+
+```
+// BAD - Clever but hard to parse
+const result = data?.items?.filter(x => x.active && x.type === 'A')?.map(x => x.value)?.reduce((a, b) => a + b, 0) ?? 0
+
+// GOOD - Clear steps, each line understandable
+const items = data?.items ?? []
+const activeTypeA = items.filter(item => item.active && item.type === 'A')
+const values = activeTypeA.map(item => item.value)
+const total = values.reduce((sum, value) => sum + value, 0)
+```
+
+### Extract Complex Conditions
+
+Give complex boolean expressions meaningful names.
+
+```
+// BAD - What does this condition mean?
+if (user.age >= 18 && user.hasVerifiedEmail && !user.isSuspended && user.acceptedTerms) {
+    allowPurchase()
+}
+
+// GOOD - Named condition explains intent
+const isEligibleForPurchase = user.age >= 18 
+    && user.hasVerifiedEmail 
+    && !user.isSuspended 
+    && user.acceptedTerms
+
+if (isEligibleForPurchase) {
+    allowPurchase()
+}
+```
+
+### Prefer Explicit Over Implicit
+
+Don't rely on hidden behavior or implicit conventions that require tribal knowledge.
+
+```
+// BAD - Implicit behavior
+function save(user) {
+    // Secretly sends email if user is new (not obvious from call site)
+}
+
+// GOOD - Explicit behavior
+function saveUser(user) { }
+function saveNewUserAndSendWelcome(user) { }
+```
+
+**See also:** `patterns/clean-code-naming.mdc`, `patterns/clean-code-design.mdc`, `patterns/clean-code-hygiene.mdc`

@@ -1,6 +1,5 @@
 ---
 description: "Node.js dependencies - npm/pnpm/yarn, package.json, security scanning, licensing"
-globs: ["**/package.json", "**/package-lock.json", "**/pnpm-lock.yaml", "**/yarn.lock", "**/.npmrc"]
 ---
 
 # Dependencies & Package Management

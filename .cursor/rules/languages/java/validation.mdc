@@ -1,6 +1,5 @@
 ---
 description: "Jakarta Bean Validation patterns for request validation in Spring Boot"
-globs: ["**/*Validator*.java", "**/*Request*.java", "**/*Command*.java"]
 ---
 
 # Jakarta Bean Validation Patterns

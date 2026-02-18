@@ -1,0 +1,30 @@
+---
+description: "Lambda X-Ray Tracer - configuration, request context, observability middleware, subsegments, AWS SDK capture"
+---
+
+# Lambda X-Ray Tracer
+
+## Setup
+
+- **Powertools Tracer:** `new Tracer({ serviceName, captureHTTPsRequests: true })`; singleton; use in handler and services
+- **Trace ID:** `process.env._X_AMZN_TRACE_ID`; parse for traceId/parentId/sampled if needed for logging or external systems
+- **AWS SDK:** `tracer.captureAWSv3Client(new S3Client({}))` (and similar) to capture SDK calls automatically
+
+## Subsegments
+
+- **Manual:** `const subsegment = segment?.addNewSubsegment('name')`; add annotations (`addAnnotation`), errors (`addError`); `subsegment?.close()` in finally
+- Use for key operations (e.g. processMessage, validateUpload) to see timing and errors in service map
+
+## Middleware
+
+- Use Powertools tracer middleware (or Middy middleware) so handler is wrapped; ensure subsegments are closed on error paths
+
+## Conventions
+
+- One Tracer per service; capture SDK clients; add subsegments for important steps; include correlationId/traceId in logs
+
+## Anti-Patterns
+
+- Not closing subsegments; capturing sensitive data in annotations; missing error recording
+
+**See also:** `logging-setup.mdc`, `logging-tracing-capture.mdc`, `logging-metrics-correlation.mdc`

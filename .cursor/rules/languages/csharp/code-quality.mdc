@@ -1,6 +1,5 @@
 ---
 description: "Code quality standards - C# 14 idioms, naming conventions, nullable references, records"
-globs: ["**/*.cs"]
 ---
 
 # Code Quality Standards
@@ -95,4 +94,4 @@ if (isRecentlyActiveUser) { }
 - Remove dead code and unused imports
 - Keep improvements proportional to the task
 
-**See also:** `architecture.mdc`
+**See also:** `../../patterns/architecture.mdc`

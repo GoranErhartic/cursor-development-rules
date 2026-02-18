@@ -11,6 +11,9 @@
 .PARAMETER TargetPath
     The path to the target project directory.
 
+.PARAMETER DryRun
+    Show what would be done without copying or modifying anything.
+
 .EXAMPLE
     .\install.ps1 -TargetPath "C:\Projects\my-project"
 
@@ -18,12 +21,14 @@
     .\install.ps1 "C:\Projects\my-project"
 
 .EXAMPLE
-    .\install.ps1 .
+    .\install.ps1 -DryRun .
 #>
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
-    [string]$TargetPath
+    [string]$TargetPath,
+    [Parameter(Mandatory=$false)]
+    [switch]$DryRun
 )
 
 # Function to show usage
@@ -31,7 +36,7 @@ function Show-Usage {
     Write-Host ""
     Write-Host "Cursor Rules Installer" -ForegroundColor Blue
     Write-Host ""
-    Write-Host "Usage: .\install.ps1 [-TargetPath] <target-project-path>"
+    Write-Host "Usage: .\install.ps1 [-TargetPath] <target-project-path> [-DryRun]"
     Write-Host ""
     Write-Host "Description:"
     Write-Host "  Copies .cursor/rules directory to the specified project."
@@ -71,6 +76,27 @@ if (-not (Test-Path -Path $TargetPath -PathType Container)) {
 $TargetPath = Resolve-Path $TargetPath
 $TargetCursorDir = Join-Path $TargetPath ".cursor"
 $TargetRulesDir = Join-Path $TargetCursorDir "rules"
+
+if ($DryRun) {
+    Write-Host "[DRY RUN] Would install Cursor rules" -ForegroundColor Blue
+    Write-Host "Source: $SourceRulesDir"
+    Write-Host "Target: $TargetRulesDir"
+    Write-Host ""
+    if (-not (Test-Path -Path $TargetCursorDir)) {
+        Write-Host "[DRY RUN] Would create .cursor directory" -ForegroundColor Yellow
+    }
+    if (Test-Path -Path $TargetRulesDir) {
+        $BackupName = "rules_bkp"
+        if (Test-Path -Path (Join-Path $TargetCursorDir $BackupName)) {
+            $BackupName = "rules_bkp_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+        }
+        Write-Host "[DRY RUN] Would backup existing rules to $BackupName" -ForegroundColor Yellow
+    }
+    Write-Host "[DRY RUN] Would copy rules from source to target" -ForegroundColor Blue
+    Write-Host ""
+    Write-Host "[DRY RUN] No changes made." -ForegroundColor Green
+    exit 0
+}
 
 Write-Host "Installing Cursor rules..." -ForegroundColor Blue
 Write-Host "Source: $SourceRulesDir"

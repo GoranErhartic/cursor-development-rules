@@ -1,0 +1,222 @@
+---
+description: "Lambda Powertools Logger - setup, handler usage, Middy middleware, log levels, structured patterns, sensitive data, conventions"
+---
+
+# Lambda Logger Setup & Best Practices
+## Overview
+
+Lambda observability requires structured logging, distributed tracing, and metrics. AWS Lambda Powertools provides a unified approach for TypeScript. Powertools 2.31+ adds event handler tracer middleware for HTTP routes and improved Parameters error handling.
+
+## Dependencies
+
+```bash
+pnpm add @aws-lambda-powertools/logger @aws-lambda-powertools/tracer @aws-lambda-powertools/metrics
+```
+
+## Logger Setup
+
+### Configuration
+
+```typescript
+// src/shared/logger/index.ts
+
+import { Logger } from "@aws-lambda-powertools/logger";
+
+export const logger = new Logger({
+  serviceName: process.env.SERVICE_NAME ?? "real-estate-api",
+  logLevel: (process.env.LOG_LEVEL as "DEBUG" | "INFO" | "WARN" | "ERROR") ?? "INFO",
+  persistentLogAttributes: {
+    environment: process.env.ENVIRONMENT ?? "development",
+    version: process.env.VERSION ?? "unknown",
+    // Multi-tenant real estate: set tenantId per request via logger.appendKeys({ tenantId })
+    ...(process.env.TENANT_ID && { tenantId: process.env.TENANT_ID }),
+  },
+});
+
+// Re-export for convenience
+export type { Logger } from "@aws-lambda-powertools/logger";
+```
+
+### Usage in Handlers
+
+```typescript
+// src/functions/create-listing/handler.ts
+
+import type { APIGatewayProxyHandler } from "aws-lambda";
+import { logger } from "@/shared/logger";
+
+export const handler: APIGatewayProxyHandler = async (event, context) => {
+  // Add Lambda context to all logs
+  logger.addContext(context);
+
+  // Add request-specific context (tenantId from auth for multi-tenant real estate)
+  logger.appendKeys({
+    correlationId: event.headers["x-correlation-id"],
+    path: event.path,
+    method: event.httpMethod,
+    ...(event.requestContext?.authorizer?.claims?.sub && {
+      tenantId: event.requestContext.authorizer.claims["custom:tenantId"],
+    }),
+  });
+
+  logger.info("Processing create listing request");
+
+  try {
+    const body = JSON.parse(event.body ?? "{}");
+
+    logger.debug({ body }, "Request body parsed");
+
+    const result = await listingService.create(body);
+
+    if (!result.success) {
+      logger.warn({ error: result.error }, "Listing creation failed");
+      return { statusCode: 400, body: JSON.stringify(result.error) };
+    }
+
+    logger.info({ listingId: result.data.id }, "Listing created successfully");
+
+    return { statusCode: 201, body: JSON.stringify(result.data) };
+  } catch (error) {
+    logger.error({ err: error }, "Unexpected error in create listing handler");
+    throw error;
+  }
+};
+```
+
+## Middy Logger Middleware
+
+```typescript
+// src/shared/middleware/index.ts
+
+import middy from "@middy/core";
+import { injectLambdaContext } from "@aws-lambda-powertools/logger/middleware";
+import { captureLambdaHandler } from "@aws-lambda-powertools/tracer/middleware";
+import { logMetrics } from "@aws-lambda-powertools/metrics/middleware";
+import { logger } from "@/shared/logger";
+import { tracer } from "@/shared/tracer";
+import { metrics } from "@/shared/metrics";
+
+export function createHandler<TEvent, TResult>(
+  handler: (event: TEvent, context: Context) => Promise<TResult>
+) {
+  return middy(handler)
+    .use(injectLambdaContext(logger, { clearState: true }))
+    .use(captureLambdaHandler(tracer))
+    .use(logMetrics(metrics, { captureColdStartMetric: true }));
+}
+```
+
+
+## Structured Logging Best Practices
+
+### Log Levels
+
+| Level | Use Case | Example |
+|-------|----------|---------|
+| DEBUG | Development diagnostics | Function entry, variable values |
+| INFO | Normal operations | Request received, operation completed |
+| WARN | Unexpected but recoverable | Retry triggered, deprecated usage |
+| ERROR | Failures requiring attention | Exception caught, operation failed |
+
+### Logging Patterns
+
+```typescript
+// GOOD: Structured with context
+logger.info({
+  propertyId: property.id,
+  listingId: listing.id,
+  price: listing.price,
+  action: "listing_created",
+}, "Listing created successfully");
+
+// BAD: String interpolation
+logger.info(`Created listing ${listingId} for property ${propertyId}`);
+
+// GOOD: Error with context
+logger.error({
+  err: error,
+  propertyId,
+  operation: "createListing",
+  attemptNumber: retryCount,
+}, "Failed to create listing");
+
+// BAD: Error message only
+logger.error(`Error: ${error.message}`);
+
+// GOOD: Use child logger for request scope
+const requestLogger = logger.createChild({
+  persistentLogAttributes: {
+    correlationId,
+    userId: user?.id,
+    requestPath: event.path,
+  },
+});
+
+requestLogger.info("Processing request");
+requestLogger.debug({ body: event.body }, "Request body");
+requestLogger.info({ result: "success" }, "Request completed");
+```
+
+
+## Sensitive Data Handling
+
+```typescript
+// NEVER log sensitive data
+logger.info({
+  email: user.email,
+  password: user.password, // ❌ NEVER
+  apiKey: apiKey,         // ❌ NEVER
+});
+
+// Redact or mask sensitive data
+function maskEmail(email: string): string {
+  const [local, domain] = email.split("@");
+  return `${local[0]}***@${domain}`;
+}
+
+function maskCard(cardNumber: string): string {
+  return `****-****-****-${cardNumber.slice(-4)}`;
+}
+
+logger.info({
+  email: maskEmail(user.email),
+  cardNumber: maskCard(payment.cardNumber),
+});
+```
+
+
+## Conventions
+
+- Use AWS Lambda Powertools for unified logging, tracing, metrics
+- ALWAYS include correlation ID in ALL logs (every log statement)
+- ALWAYS add correlation ID as X-Ray annotation (searchable)
+- Use structured logging with named properties
+- Log at appropriate levels (not everything as INFO)
+- Include context: operation name, entity IDs, timing
+- Propagate correlation ID across ALL service boundaries (SQS, SNS, HTTP)
+- Propagate X-Ray trace header (`X-Amzn-Trace-Id`) to external services
+- Capture AWS SDK calls in X-Ray traces using `tracer.captureAWSv3Client()`
+- Store correlation ID in database records for later tracing
+- Use AsyncLocalStorage for request-scoped context
+- Add X-Ray annotations for: correlationId, userId, entityId, error, statusCode
+- Add X-Ray metadata for: request/response bodies, query params, debug info
+- Close subsegments in finally blocks (prevent leaks)
+- Return correlation ID in response headers
+
+## Anti-Patterns
+
+- ❌ String interpolation in log messages
+- ❌ Logging sensitive data (passwords, tokens, PII)
+- ❌ Missing correlation IDs in logs
+- ❌ Missing correlation ID propagation to downstream services
+- ❌ console.log in production code
+- ❌ Overly verbose logging (performance impact)
+- ❌ Not capturing errors in traces
+- ❌ Missing metrics for critical operations
+- ❌ Inconsistent log structure across services
+- ❌ Not closing X-Ray subsegments (memory leak)
+- ❌ Using metadata for searchable fields (use annotations instead)
+- ❌ Missing trace propagation to external HTTP calls
+- ❌ Generating new correlation ID for each service (breaks tracing)
+
+**See also:** `logging-tracing.mdc`, `logging-metrics-correlation.mdc`, `lambda-handlers.mdc`, `error-handling.mdc`, `../../patterns/security.mdc`
