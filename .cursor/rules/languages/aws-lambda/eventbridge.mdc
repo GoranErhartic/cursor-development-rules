@@ -213,4 +213,4 @@ To allow another account to publish to your bus, attach a resource-based policy 
 - Missing idempotency in consumers (at-least-once delivery)
 - Overly broad event patterns (filter at rule level)
 
-**See also:** `sns-events.mdc`, `domains/real-estate/aws-lambda/real-estate-domain.mdc`, `idempotency.mdc`, `cdk-infrastructure-queues.mdc`
+**See also:** `sns-events.mdc`, `idempotency.mdc`, `cdk-infrastructure-queues.mdc`

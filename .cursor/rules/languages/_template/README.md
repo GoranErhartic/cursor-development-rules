@@ -58,12 +58,7 @@ Each `.mdc` file should follow this structure:
 description: "Brief description of what this rule file covers"
 globs: ["**/*.ext", "**/specific-path/**/*.ext"]
 tags: ["api", "testing"]                     # Optional taxonomy
-complexity: "beginner|intermediate|advanced" # Optional
 relatedRules: ["validation.mdc"]             # Optional
-dependsOn: []                                # Optional
-deprecated: false                            # Optional
-replacedBy: ""                               # Optional
-lastReviewed: "YYYY-MM-DD"                   # Optional
 ---
 
 # Title

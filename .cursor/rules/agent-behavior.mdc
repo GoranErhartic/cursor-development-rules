@@ -2,12 +2,7 @@
 description: "Core agent behavior - persona, clarification rules, rule flagging"
 alwaysApply: true
 tags: ["governance", "behavior", "safety"]
-complexity: "beginner"
 relatedRules: ["rule-index.mdc", "project-context.mdc"]
-dependsOn: []
-deprecated: false
-replacedBy: ""
-lastReviewed: "2026-02-18"
 ---
 
 # Core Behavioral Rules

@@ -2,12 +2,7 @@
 description: "Node.js + AWS Lambda project guide - technology stack, rule routing, key conventions"
 globs: ["**/functions/**/*.ts", "**/lambda/**/*.ts", "**/handlers/**/*.ts", "**/*.handler.ts", "**/cdk/**/*.ts", "**/cdk/**/*.js"]
 tags: ["aws-lambda", "router", "typescript"]
-complexity: "beginner"
 relatedRules: ["rule-index.mdc", "project-context.mdc"]
-dependsOn: []
-deprecated: false
-replacedBy: ""
-lastReviewed: "2026-02-18"
 ---
 
 # Node.js + AWS Lambda Development Guide
@@ -80,10 +75,6 @@ Consult these rules based on what you are working on:
 - Clean code principles → `patterns/clean-code.mdc`
 - CQRS details → `patterns/cqrs.mdc`
 - API design conventions → `patterns/api-design.mdc`
-
-### Optional Domain Packs (explicit opt-in)
-
-- Real estate domain pack (activate only when `project-context.mdc` includes `real-estate` in domains): `domains/real-estate/aws-lambda/real-estate-domain.mdc`, `domains/real-estate/aws-lambda/real-estate-events.mdc`, `domains/real-estate/aws-lambda/real-estate-rules.mdc`
 
 ## Key Conventions
 

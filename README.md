@@ -252,7 +252,6 @@ Enforces modern language features and best practices:
 | **Infrastructure** | CDK (`cdk-infrastructure-queues`, `cdk-infrastructure-lambda`, `cdk-infrastructure-data`, `cdk-infrastructure-monitoring`), `cdk-testing`, `multi-environment`, `monitoring` |
 | **Observability** | `logging-setup`, `logging-tracing`, `logging-tracing-capture`, `logging-metrics-correlation` |
 | **Cross-cutting** | `error-handling`, `security`, `testing`, `idempotency`, `powertools-parameters`, `code-quality` |
-| **Domain (optional)** | `domains/real-estate/aws-lambda/real-estate-domain.mdc`, `domains/real-estate/aws-lambda/real-estate-events.mdc`, `domains/real-estate/aws-lambda/real-estate-rules.mdc` |
 
 **Technologies:**
 - Node.js 22, TypeScript 5.7, AWS CDK
@@ -424,10 +423,6 @@ Your support helps maintain and expand this rule system with:
 ## 📜 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 📦 Rule Lifecycle
-
-Release/versioning, deprecation lifecycle, and maintenance cadence are defined in [RULES_RELEASE.md](RULES_RELEASE.md). Ongoing change notes belong in [CHANGELOG.md](CHANGELOG.md).
 
 ## 🙏 Acknowledgments
 

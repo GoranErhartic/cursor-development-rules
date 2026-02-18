@@ -1,12 +1,7 @@
 ---
 description: "TDD mandate - Red/Green/Refactor workflow, test-first default, escape clause for trivial changes"
 tags: ["tdd", "workflow", "testing"]
-complexity: "beginner"
 relatedRules: ["development/tdd-planning.mdc", "patterns/testing.mdc"]
-dependsOn: []
-deprecated: false
-replacedBy: ""
-lastReviewed: "2026-02-18"
 ---
 
 # TDD Workflow
