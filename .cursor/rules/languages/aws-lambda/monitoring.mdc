@@ -1,0 +1,143 @@
+---
+description: "CloudWatch monitoring - alarms for Lambda errors throttles duration, SQS depth, DynamoDB, SNS alarm actions, dashboards"
+---
+
+# CloudWatch Monitoring
+
+## Overview
+
+Add CloudWatch Alarms for Lambda errors, throttles, duration, SQS queue depth, and DynamoDB throttles. Notify via SNS for critical failures. Use CDK to define alarms and optional dashboards.
+
+## Lambda Alarms
+
+```typescript
+// cdk/lib/stacks/monitoring-stack.ts
+
+import { Stack, StackProps, Duration } from "aws-cdk-lib";
+import { Construct } from "constructs";
+import {
+  Alarm,
+  ComparisonOperator,
+  TreatMissingData,
+  Stats,
+} from "aws-cdk-lib/aws-cloudwatch";
+import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
+import { Topic } from "aws-cdk-lib/aws-sns";
+import { Function as LambdaFunction } from "aws-cdk-lib/aws-lambda";
+
+interface MonitoringStackProps extends StackProps {
+  lambdaFunctions: LambdaFunction[];
+  alarmTopic?: Topic;
+}
+
+export class MonitoringStack extends Stack {
+  constructor(scope: Construct, id: string, props: MonitoringStackProps) {
+    super(scope, id, props);
+
+    const alarmTopic =
+      props.alarmTopic ??
+      new Topic(this, "AlarmTopic", { displayName: "Real Estate Alarms" });
+
+    for (const fn of props.lambdaFunctions) {
+      new Alarm(this, `${fn.node.id}Errors`, {
+        alarmName: `${fn.functionName}-errors`,
+        metric: fn.metricErrors({ period: Duration.minutes(1) }),
+        threshold: 5,
+        evaluationPeriods: 1,
+        comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: TreatMissingData.NOT_BREACHING,
+      }).addAlarmAction(new SnsAction(alarmTopic));
+
+      new Alarm(this, `${fn.node.id}Throttles`, {
+        alarmName: `${fn.functionName}-throttles`,
+        metric: fn.metricThrottles({ period: Duration.minutes(1) }),
+        threshold: 1,
+        evaluationPeriods: 1,
+        comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: TreatMissingData.NOT_BREACHING,
+      }).addAlarmAction(new SnsAction(alarmTopic));
+
+      const timeoutMs = fn.timeout?.toMilliseconds() ?? 30000;
+      new Alarm(this, `${fn.node.id}Duration`, {
+        alarmName: `${fn.functionName}-duration`,
+        metric: fn.metricDuration({ period: Duration.minutes(1), statistic: Stats.P99 }),
+        threshold: timeoutMs * 0.8,
+        evaluationPeriods: 2,
+        comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: TreatMissingData.NOT_BREACHING,
+      }).addAlarmAction(new SnsAction(alarmTopic));
+    }
+  }
+}
+```
+
+## SQS Queue Depth
+
+```typescript
+import { Metric } from "aws-cdk-lib/aws-cloudwatch";
+import { Queue } from "aws-cdk-lib/aws-sqs";
+
+for (const queue of props.queues ?? []) {
+  new Alarm(this, `QueueDepth-${queue.node.id}`, {
+    alarmName: `sqs-${queue.queueName}-depth`,
+    metric: new Metric({
+      namespace: "AWS/SQS",
+      metricName: "ApproximateNumberOfMessagesVisible",
+      dimensionsMap: { QueueName: queue.queueName },
+      period: Duration.minutes(5),
+      statistic: Stats.SUM,
+    }),
+    threshold: 1000,
+    evaluationPeriods: 2,
+    comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+    treatMissingData: TreatMissingData.NOT_BREACHING,
+  }).addAlarmAction(new SnsAction(alarmTopic));
+}
+```
+
+## DynamoDB Consumed Capacity
+
+For provisioned tables, alarm on throttled requests. For PAY_PER_REQUEST, optional alarms on user errors or system errors.
+
+## Dashboard (Optional)
+
+```typescript
+import { Dashboard, GraphWidget } from "aws-cdk-lib/aws-cloudwatch";
+
+const dashboard = new Dashboard(this, "Dashboard", {
+  dashboardName: "RealEstate",
+  defaultInterval: Duration.hours(3),
+});
+
+props.lambdaFunctions.forEach((fn) => {
+  dashboard.addWidgets(
+    new GraphWidget({
+      title: `${fn.functionName} invocations`,
+      left: [fn.metricInvocations()],
+      width: 12,
+    }),
+    new GraphWidget({
+      title: `${fn.functionName} errors`,
+      left: [fn.metricErrors()],
+      width: 12,
+    })
+  );
+});
+```
+
+## Conventions
+
+- Alarm on Lambda errors, throttles, and P99 duration (e.g. > 80% of timeout)
+- Use SNS topic for alarm actions; subscribe email or Slack in separate step
+- Set `treatMissingData: NOT_BREACHING` to avoid alarms when there is no traffic
+- Tune thresholds and evaluation periods per environment (stricter in prod)
+- Use dashboards for operational visibility; alarms for alerting
+
+## Anti-Patterns
+
+- No alarms for critical Lambdas or queues
+- Alarm on every single error (use threshold and evaluation periods)
+- Missing SNS subscription for alarm actions
+- TreatMissingData BREACHING when no data means no traffic
+
+**See also:** `cdk-infrastructure-monitoring.mdc`, `logging-setup.mdc`

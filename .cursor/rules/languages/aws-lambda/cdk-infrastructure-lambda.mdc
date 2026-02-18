@@ -1,0 +1,236 @@
+---
+description: "CDK Lambda function construct - NodejsFunction, esbuild, env, bundling"
+---
+## Lambda Function Construct
+
+### Standard Lambda Configuration
+
+```typescript
+// cdk/lib/constructs/lambda-function.ts
+
+import { Construct } from "constructs";
+import { Duration } from "aws-cdk-lib";
+import {
+  Runtime,
+  Tracing,
+  Architecture,
+  Function as LambdaFunction,
+  FunctionProps,
+  LayerVersion,
+} from "aws-cdk-lib/aws-lambda";
+import { NodejsFunction, NodejsFunctionProps } from "aws-cdk-lib/aws-lambda-nodejs";
+import { RetentionDays } from "aws-cdk-lib/aws-logs";
+
+export interface StandardLambdaProps extends Omit<NodejsFunctionProps, "runtime" | "architecture"> {
+  /**
+   * Memory size in MB
+   */
+  memorySize?: number;
+  
+  /**
+   * Timeout in seconds
+   */
+  timeoutSeconds?: number;
+  
+  /**
+   * Reserved concurrency
+   */
+  reservedConcurrentExecutions?: number;
+  
+  /**
+   * Enable X-Ray tracing
+   */
+  enableTracing?: boolean;
+  
+  /**
+   * Layers to attach
+   */
+  layers?: LayerVersion[];
+}
+
+export class StandardLambda extends NodejsFunction {
+  constructor(scope: Construct, id: string, props: StandardLambdaProps) {
+    super(scope, id, {
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64, // Cost-effective
+      memorySize: props.memorySize ?? 512,
+      timeout: Duration.seconds(props.timeoutSeconds ?? 30),
+      tracing: props.enableTracing !== false ? Tracing.ACTIVE : Tracing.DISABLED,
+      logRetention: RetentionDays.TWO_WEEKS,
+      reservedConcurrentExecutions: props.reservedConcurrentExecutions,
+      bundling: {
+        minify: true,
+        sourceMap: true,
+        sourcesContent: false,
+        externalModules: [
+          "@aws-sdk/*", // Use Lambda-provided SDK
+        ],
+        esbuildArgs: {
+          "--tree-shaking": "true",
+        },
+        ...props.bundling,
+      },
+      environment: {
+        NODE_OPTIONS: "--enable-source-maps",
+        LOG_LEVEL: "info",
+        ...props.environment,
+      },
+      ...props,
+    });
+  }
+}
+```
+
+### API Handler Lambda
+
+```typescript
+// cdk/lib/stacks/api-stack.ts
+
+import { Stack, StackProps, Duration } from "aws-cdk-lib";
+import { Construct } from "constructs";
+import { RestApi, LambdaIntegration, Cors } from "aws-cdk-lib/aws-apigateway";
+import { StandardLambda } from "../constructs/lambda-function";
+import { Table } from "aws-cdk-lib/aws-dynamodb";
+import { Secret } from "aws-cdk-lib/aws-secretsmanager";
+
+interface ApiStackProps extends StackProps {
+  dataTable: Table;
+  idempotencyTable: Table;
+  databaseSecret: Secret;
+  rdsProxyEndpoint: string;
+}
+
+export class ApiStack extends Stack {
+  public readonly api: RestApi;
+
+  constructor(scope: Construct, id: string, props: ApiStackProps) {
+    super(scope, id, props);
+
+    // Create API Gateway
+    this.api = new RestApi(this, "RealEstateApi", {
+      restApiName: "Real Estate API",
+      defaultCorsPreflightOptions: {
+        allowOrigins: Cors.ALL_ORIGINS,
+        allowMethods: Cors.ALL_METHODS,
+        allowHeaders: ["Content-Type", "Authorization", "X-Correlation-Id"],
+      },
+    });
+
+    // Properties resource
+    const properties = this.api.root.addResource("properties");
+    const propertyById = properties.addResource("{propertyId}");
+
+    // Create Property Handler
+    const createPropertyHandler = new StandardLambda(this, "CreateProperty", {
+      entry: "src/functions/create-property/handler.ts",
+      handler: "handler",
+      memorySize: 512,
+      timeoutSeconds: 30,
+      environment: {
+        DYNAMODB_TABLE_NAME: props.dataTable.tableName,
+        IDEMPOTENCY_TABLE_NAME: props.idempotencyTable.tableName,
+        DATABASE_URL: `postgresql://user:password@${props.rdsProxyEndpoint}:5432/realestate?connection_limit=1`,
+      },
+    });
+
+    props.dataTable.grantReadWriteData(createPropertyHandler);
+    props.idempotencyTable.grantReadWriteData(createPropertyHandler);
+    props.databaseSecret.grantRead(createPropertyHandler);
+
+    properties.addMethod("POST", new LambdaIntegration(createPropertyHandler));
+
+    // Get Property Handler
+    const getPropertyHandler = new StandardLambda(this, "GetProperty", {
+      entry: "src/functions/get-property/handler.ts",
+      handler: "handler",
+      memorySize: 256,
+      timeoutSeconds: 10,
+      environment: {
+        DYNAMODB_TABLE_NAME: props.dataTable.tableName,
+      },
+    });
+
+    props.dataTable.grantReadData(getPropertyHandler);
+
+    propertyById.addMethod("GET", new LambdaIntegration(getPropertyHandler));
+
+    // Listings resource
+    const listings = properties.addResource("listings");
+
+    // Search Properties Handler
+    const searchHandler = new StandardLambda(this, "SearchProperties", {
+      entry: "src/functions/search-properties/handler.ts",
+      handler: "handler",
+      memorySize: 1024,
+      timeoutSeconds: 30,
+      environment: {
+        OPENSEARCH_ENDPOINT: props.opensearchEndpoint,
+        LISTINGS_INDEX: "listings",
+      },
+    });
+
+    this.api.root.addResource("search").addMethod(
+      "GET",
+      new LambdaIntegration(searchHandler)
+    );
+  }
+}
+```
+
+### API Gateway HTTP API (v2, Recommended for New APIs)
+
+HTTP API is cheaper and supports JWT authorizers natively. Use payload format 2.0 and `APIGatewayProxyEventV2` in handlers.
+
+```typescript
+// cdk/lib/stacks/http-api-stack.ts
+
+import { Stack, StackProps } from "aws-cdk-lib";
+import { Construct } from "constructs";
+import { HttpApi, HttpMethod, PayloadFormatVersion } from "aws-cdk-lib/aws-apigatewayv2";
+import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
+import { StandardLambda } from "../constructs/lambda-function";
+import { Table } from "aws-cdk-lib/aws-dynamodb";
+
+interface HttpApiStackProps extends StackProps {
+  dataTable: Table;
+}
+
+export class HttpApiStack extends Stack {
+  public readonly httpApi: HttpApi;
+
+  constructor(scope: Construct, id: string, props: HttpApiStackProps) {
+    super(scope, id, props);
+
+    this.httpApi = new HttpApi(this, "RealEstateHttpApi", {
+      apiName: "real-estate-http-api",
+      corsPreflight: {
+        allowOrigins: ["*"],
+        allowMethods: [HttpMethod.GET, HttpMethod.POST, HttpMethod.PUT, HttpMethod.DELETE],
+        allowHeaders: ["Content-Type", "Authorization", "X-Correlation-Id"],
+      },
+    });
+
+    const getPropertyHandler = new StandardLambda(this, "GetProperty", {
+      entry: "src/functions/get-property/handler.ts",
+      handler: "handler",
+      memorySize: 256,
+      timeoutSeconds: 10,
+      environment: { DYNAMODB_TABLE_NAME: props.dataTable.tableName },
+    });
+    props.dataTable.grantReadData(getPropertyHandler);
+
+    this.httpApi.addRoutes({
+      path: "/properties/{propertyId}",
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration(
+        "GetPropertyIntegration",
+        getPropertyHandler,
+        { payloadFormatVersion: PayloadFormatVersion.V2_0 }
+      ),
+    });
+  }
+}
+```
+
+
+**See also:** `cdk-infrastructure-queues.mdc`, `cdk-infrastructure-data.mdc`, `lambda-handlers.mdc`

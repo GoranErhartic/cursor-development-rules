@@ -1,0 +1,46 @@
+---
+description: "DynamoDB patterns - single-table design with PK/SK, GSI overloading, DynamoDB Streams, optimistic locking with version attribute, DocumentClient v3, batch operations, query vs scan, TTL"
+---
+
+# DynamoDB Patterns
+
+## Overview
+
+Use single-table design with overloaded PK/SK and GSIs. Use AWS SDK v3: `@aws-sdk/client-dynamodb`, `@aws-sdk/lib-dynamodb` (DocumentClient).
+
+## Client
+
+- `DynamoDBDocumentClient.from(DynamoDBClient)`; singleton; `marshallOptions: { removeUndefinedValues: true }`; avoid `convertEmptyValues`
+
+## Key Design
+
+- **PK/SK:** Composite keys (e.g. `PROPERTY#<id>`, `LISTING#<id>`); use `METADATA` or similar for single-item entity record
+- **GSI:** Overload GSI1PK/GSI1SK for access patterns (e.g. by owner, by agent, by status+time); project only needed attributes if desired
+- **Entity type:** Include `entityType` (or use PK/SK prefix) for filtering
+
+## Operations
+
+- **GetItem:** By PK + SK
+- **PutItem:** Use conditional expression for optimistic locking: `version = :currentVersion`; increment version on update
+- **Query:** By PK (required); optional SK condition (begins_with, between, =); filter expression for post-query filter
+- **BatchGetItem:** Up to 100 items; handle `UnprocessedKeys` and retry
+- **BatchWriteItem:** Put/Delete; handle `UnprocessedItems`; do not exceed 25 items per request
+- **Scan:** Avoid or limit; use parallel scan only when necessary with segment/totalSegments
+
+## Optimistic Locking
+
+- Add `version` (number) to entities; on update set `ConditionExpression: 'version = :v'`, `:v` = current; increment in update expression
+
+## TTL
+
+- Add `ttl` attribute (Unix timestamp); enable TTL on table to desired attribute
+
+## Conventions
+
+- Single table per service/domain; consistent key naming; always use condition for overwrite-sensitive writes; propagate correlationId in logs
+
+## Anti-Patterns
+
+- Multiple tables for same domain; scan without limit; ignoring UnprocessedKeys/UnprocessedItems; no version for concurrent updates
+
+**See also:** `dynamodb-streams.mdc`, `idempotency.mdc`, `../../patterns/architecture.mdc`

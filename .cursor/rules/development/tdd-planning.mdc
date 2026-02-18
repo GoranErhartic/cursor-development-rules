@@ -1,5 +1,5 @@
 ---
-description: "TDD planning requirements - test specifications before implementation"
+description: "TDD test planning - test scenario specification, test-first plan template, method naming conventions (Method_WhenCondition_ShouldResult), behavior-to-test mapping"
 ---
 
 # TDD Planning Requirements
@@ -18,7 +18,11 @@ Before any implementation work, the plan MUST include:
 |-----------|----------|----------|
 | `Method_WhenCondition_ShouldResult` | Description | High/Med/Low |
 
+Use naming style aligned to stack conventions from `patterns/testing.mdc` when the project language is not C# or Java.
+
 ## Verification
 - [ ] Plan includes test specifications
 - [ ] Tests are written before implementation
 - [ ] Each behavior has corresponding test
+
+**See also:** `patterns/testing.mdc`, `development/tdd-workflow.mdc`, `development/code-implementation.mdc`

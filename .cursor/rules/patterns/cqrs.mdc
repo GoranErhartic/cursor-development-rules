@@ -1,5 +1,5 @@
 ---
-description: "CQRS pattern - Command Query Responsibility Segregation concepts"
+description: "CQRS pattern - Command (imperative, state-changing) vs Query (read-only, returns DTOs) separation, mediator/dispatcher routing, pipeline behaviors (validation, logging, transactions), domain events, read/write model sync"
 ---
 
 # CQRS Pattern

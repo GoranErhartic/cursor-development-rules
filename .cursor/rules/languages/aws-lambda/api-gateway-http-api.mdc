@@ -1,0 +1,187 @@
+---
+description: "API Gateway HTTP API v2 - HttpApi CDK construct, JWT/Lambda authorizer, payload format 2.0, APIGatewayProxyEventV2 types, route configuration, CORS, path parameters, query strings"
+---
+
+# API Gateway HTTP API (v2)
+
+## Overview
+
+HTTP API (v2) is the recommended API Gateway type for most Lambda-backed APIs: lower cost, lower latency, and native JWT authorizers. Use payload format version 2.0 and type `APIGatewayProxyEventV2` in handlers.
+
+## When to Use HTTP API vs REST API
+
+| Use HTTP API (v2) | Use REST API (v1) |
+|-------------------|-------------------|
+| New APIs, JWT/Cognito auth | API keys, request validation, WAF v1 |
+| Lower cost, simpler | Complex request/response mapping |
+| Real estate web app (Cognito) | Legacy or specific v1 features |
+
+## Dependencies
+
+```bash
+pnpm add -D @types/aws-lambda
+# CDK: aws-cdk-lib (HttpApi, HttpLambdaIntegration, HttpJwtAuthorizer)
+```
+
+## CDK HttpApi with JWT Authorizer
+
+```typescript
+// cdk/lib/stacks/http-api-stack.ts
+
+import { Stack, StackProps } from "aws-cdk-lib";
+import { Construct } from "constructs";
+import {
+  HttpApi,
+  HttpMethod,
+  PayloadFormatVersion,
+  HttpRouteKey,
+} from "aws-cdk-lib/aws-apigatewayv2";
+import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
+import { HttpJwtAuthorizer } from "aws-cdk-lib/aws-apigatewayv2-authorizers";
+import { StandardLambda } from "../constructs/lambda-function";
+import { Table } from "aws-cdk-lib/aws-dynamodb";
+
+interface HttpApiStackProps extends StackProps {
+  dataTable: Table;
+  idempotencyTable: Table;
+  userPoolId: string;
+  userPoolClientId: string;
+}
+
+export class HttpApiStack extends Stack {
+  public readonly httpApi: HttpApi;
+
+  constructor(scope: Construct, id: string, props: HttpApiStackProps) {
+    super(scope, id, props);
+
+    const jwtAuthorizer = new HttpJwtAuthorizer("JwtAuthorizer", props.userPoolId, {
+      identitySource: ["$request.header.Authorization"],
+      jwtAudience: [props.userPoolClientId],
+    });
+
+    this.httpApi = new HttpApi(this, "RealEstateHttpApi", {
+      apiName: "real-estate-http-api",
+      corsPreflight: {
+        allowOrigins: [process.env.CORS_ORIGIN ?? "https://app.example.com"],
+        allowMethods: [HttpMethod.GET, HttpMethod.POST, HttpMethod.PUT, HttpMethod.DELETE],
+        allowHeaders: ["Content-Type", "Authorization", "X-Correlation-Id"],
+        allowCredentials: true,
+      },
+    });
+
+    const getPropertyHandler = new StandardLambda(this, "GetProperty", {
+      entry: "src/functions/get-property/handler.ts",
+      handler: "handler",
+      memorySize: 256,
+      timeoutSeconds: 10,
+      environment: { DYNAMODB_TABLE_NAME: props.dataTable.tableName },
+    });
+    props.dataTable.grantReadData(getPropertyHandler);
+
+    // Public route (no auth)
+    this.httpApi.addRoutes({
+      path: "/properties/{propertyId}",
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration(
+        "GetPropertyIntegration",
+        getPropertyHandler,
+        { payloadFormatVersion: PayloadFormatVersion.V2_0 }
+      ),
+    });
+
+    // Protected route (JWT required)
+    const createListingHandler = new StandardLambda(this, "CreateListing", {
+      entry: "src/functions/create-listing/handler.ts",
+      handler: "handler",
+      memorySize: 512,
+      timeoutSeconds: 30,
+      environment: {
+        DYNAMODB_TABLE_NAME: props.dataTable.tableName,
+        IDEMPOTENCY_TABLE_NAME: props.idempotencyTable.tableName,
+      },
+    });
+    props.dataTable.grantReadWriteData(createListingHandler);
+    props.idempotencyTable.grantReadWriteData(createListingHandler);
+
+    this.httpApi.addRoutes({
+      path: "/listings",
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration(
+        "CreateListingIntegration",
+        createListingHandler,
+        { payloadFormatVersion: PayloadFormatVersion.V2_0 }
+      ),
+      authorizer: jwtAuthorizer,
+    });
+  }
+}
+```
+
+## Handler with Payload 2.0 (APIGatewayProxyEventV2)
+
+```typescript
+// src/functions/get-property/handler.ts
+
+import type { APIGatewayProxyResultV2, APIGatewayProxyEventV2 } from "aws-lambda";
+import { logger } from "@/shared/logger";
+
+export const handler = async (
+  event: APIGatewayProxyEventV2,
+  context: Context
+): Promise<APIGatewayProxyResultV2> => {
+  context.callbackWaitsForEmptyEventLoop = false;
+
+  const propertyId = event.pathParameters?.propertyId;
+  const requestId = event.requestContext.requestId;
+
+  logger.appendKeys({ requestId, propertyId });
+
+  if (!propertyId) {
+    return {
+      statusCode: 400,
+      body: JSON.stringify({ message: "Property ID is required" }),
+    };
+  }
+
+  const property = await propertyService.findById(propertyId);
+  if (!property) {
+    return {
+      statusCode: 404,
+      body: JSON.stringify({ message: "Property not found" }),
+    };
+  }
+
+  return {
+    statusCode: 200,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(property),
+  };
+};
+```
+
+## Event Shape (Payload 2.0)
+
+- `event.requestContext.requestId` — use for correlation
+- `event.rawPath`, `event.rawQueryString` — path and query
+- `event.headers` — lowercase keys
+- `event.body` — string or null
+- `event.requestContext.authorizer?.jwt?.claims` — JWT claims when using JWT authorizer
+
+## CORS
+
+Set `corsPreflight` on the HttpApi. In production use specific origins, not `["*"]`. Include `Authorization` and `X-Correlation-Id` in `allowHeaders`. When using credentials, set `allowCredentials: true` and a specific `allowOrigins` (wildcard not allowed with credentials).
+
+## Conventions
+
+- Use `PayloadFormatVersion.V2_0` for all HttpLambdaIntegration
+- Type handlers with `APIGatewayProxyEventV2` and `APIGatewayProxyResultV2`
+- Prefer HTTP API for new real estate web app APIs with Cognito
+- Restrict CORS origins in production
+
+## Anti-Patterns
+
+- Using REST API (v1) when JWT auth and cost matter
+- Typing handlers with `APIGatewayProxyEvent` (v1) for HTTP API
+- CORS `allowOrigins: ["*"]` with `allowCredentials: true` (invalid)
+
+**See also:** `lambda-handlers.mdc`, `cdk-infrastructure-lambda.mdc`, `cdk-infrastructure-data.mdc`, `security.mdc`

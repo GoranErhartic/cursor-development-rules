@@ -1,0 +1,213 @@
+---
+description: "S3 presigned URLs - CDK infrastructure, client-side usage, conventions"
+---
+## CDK Infrastructure
+
+```typescript
+// cdk/lib/constructs/s3-uploads.ts
+
+import { Construct } from "constructs";
+import { RemovalPolicy, Duration } from "aws-cdk-lib";
+import {
+  Bucket,
+  BucketEncryption,
+  BlockPublicAccess,
+  ObjectOwnership,
+  HttpMethods,
+  CorsRule,
+} from "aws-cdk-lib/aws-s3";
+import { Function } from "aws-cdk-lib/aws-lambda";
+import { S3EventSource } from "aws-cdk-lib/aws-lambda-event-sources";
+import { EventType } from "aws-cdk-lib/aws-s3";
+
+export interface S3UploadsBucketProps {
+  allowedOrigins: string[];
+  validationFunction: Function;
+}
+
+export class S3UploadsBucket extends Construct {
+  public readonly uploadsBucket: Bucket;
+  public readonly quarantineBucket: Bucket;
+
+  constructor(scope: Construct, id: string, props: S3UploadsBucketProps) {
+    super(scope, id);
+
+    // Quarantine bucket for failed validations
+    this.quarantineBucket = new Bucket(this, "QuarantineBucket", {
+      bucketName: "real-estate-quarantine",
+      encryption: BucketEncryption.S3_MANAGED,
+      blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
+      removalPolicy: RemovalPolicy.RETAIN,
+      lifecycleRules: [
+        {
+          id: "DeleteAfter30Days",
+          expiration: Duration.days(30),
+        },
+      ],
+    });
+
+    // Main uploads bucket
+    this.uploadsBucket = new Bucket(this, "UploadsBucket", {
+      bucketName: "real-estate-uploads",
+      encryption: BucketEncryption.S3_MANAGED,
+      blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
+      objectOwnership: ObjectOwnership.BUCKET_OWNER_ENFORCED,
+      removalPolicy: RemovalPolicy.RETAIN,
+      versioned: true,
+
+      // CORS for presigned URL uploads from browser
+      cors: [
+        {
+          allowedOrigins: props.allowedOrigins,
+          allowedMethods: [HttpMethods.PUT, HttpMethods.POST, HttpMethods.GET],
+          allowedHeaders: ["*"],
+          exposedHeaders: ["ETag"],
+          maxAge: 3600,
+        },
+      ],
+
+      // Lifecycle rules
+      lifecycleRules: [
+        {
+          id: "DeleteIncompleteMultipartUploads",
+          abortIncompleteMultipartUploadAfter: Duration.days(1),
+        },
+        {
+          id: "MoveToInfrequentAccess",
+          transitions: [
+            {
+              storageClass: StorageClass.INFREQUENT_ACCESS,
+              transitionAfter: Duration.days(90),
+            },
+          ],
+        },
+      ],
+    });
+
+    // Grant quarantine bucket access to validation function
+    this.quarantineBucket.grantPut(props.validationFunction);
+    this.uploadsBucket.grantReadWrite(props.validationFunction);
+    this.uploadsBucket.grantDelete(props.validationFunction);
+
+    // Trigger validation on upload
+    props.validationFunction.addEventSource(
+      new S3EventSource(this.uploadsBucket, {
+        events: [EventType.OBJECT_CREATED],
+      })
+    );
+  }
+}
+```
+
+## Client-Side Usage
+
+### React Upload Component Example
+
+```typescript
+// frontend/src/hooks/useS3Upload.ts
+
+interface UploadProgress {
+  loaded: number;
+  total: number;
+  percentage: number;
+}
+
+export async function uploadToS3(
+  file: File,
+  entityType: "property" | "listing" | "document",
+  entityId: string,
+  onProgress?: (progress: UploadProgress) => void
+): Promise<{ key: string }> {
+  // 1. Get presigned URL from backend
+  const response = await fetch("/api/uploads/get-url", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      fileName: file.name,
+      contentType: file.type,
+      contentLength: file.size,
+      entityType,
+      entityId,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || "Failed to get upload URL");
+  }
+
+  const { uploadUrl, key, maxSize } = await response.json();
+
+  // 2. Validate file size client-side
+  if (file.size > maxSize) {
+    throw new Error(`File size exceeds maximum ${formatBytes(maxSize)}`);
+  }
+
+  // 3. Upload directly to S3
+  const xhr = new XMLHttpRequest();
+
+  const uploadPromise = new Promise<void>((resolve, reject) => {
+    xhr.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable && onProgress) {
+        onProgress({
+          loaded: event.loaded,
+          total: event.total,
+          percentage: Math.round((event.loaded / event.total) * 100),
+        });
+      }
+    });
+
+    xhr.addEventListener("load", () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+      } else {
+        reject(new Error(`Upload failed with status ${xhr.status}`));
+      }
+    });
+
+    xhr.addEventListener("error", () => reject(new Error("Upload failed")));
+    xhr.addEventListener("abort", () => reject(new Error("Upload aborted")));
+  });
+
+  xhr.open("PUT", uploadUrl);
+  xhr.setRequestHeader("Content-Type", file.type);
+  xhr.send(file);
+
+  await uploadPromise;
+
+  return { key };
+}
+```
+
+## Conventions
+
+- ALWAYS validate MIME type before generating upload URL
+- ALWAYS validate content type matches file extension
+- ALWAYS validate file content server-side after upload (magic numbers)
+- Use short expiration times (5-15 minutes for uploads)
+- Generate safe, structured S3 keys (no user input in key path)
+- Store upload metadata (userId, entityId, correlationId) in S3 object metadata
+- Quarantine files that fail validation (don't just delete)
+- Use multipart uploads for files > 100MB
+- Configure CORS only for specific origins
+- Block all public access to buckets
+- Include correlation ID in S3 object metadata for tracing
+- Add X-Ray annotations for key operations (upload, validation, quarantine)
+- Trace S3 client calls with `tracer.captureAWSv3Client()`
+- Log correlation ID in all upload/download operations
+
+## Anti-Patterns
+
+- ❌ Trusting client-provided content type without validation
+- ❌ Long-lived presigned URLs (hours/days)
+- ❌ User-provided S3 keys (path traversal risk)
+- ❌ Skipping server-side content validation
+- ❌ Public S3 buckets
+- ❌ Single-part uploads for very large files
+- ❌ Wildcard CORS origins in production
+- ❌ Not aborting incomplete multipart uploads
+- ❌ Storing sensitive data in S3 key paths
+
+**See also:** `lambda-handlers.mdc`, `security.mdc`, `cdk-infrastructure-data.mdc`
+
+**See also:** `s3-presigned-urls-upload.mdc`, `s3-presigned-urls-download.mdc`, `s3-presigned-urls-validation.mdc`

@@ -1,0 +1,41 @@
+---
+description: "Lambda error handling - Result pattern for Lambda, error classification, API Gateway error responses, SQS batch error handling, Middy error middleware"
+---
+
+# Lambda Error Handling
+
+Concepts (Result pattern, RFC 7807): see `../../patterns/error-handling.mdc`. Below: Lambda-specific classification and responses.
+
+## Error Classification
+
+- **Transient:** Network timeout, 5xx — retry (SQS: do not add to batchItemFailures only if you want retry; by default failed items are retried)
+- **Validation/Not Found/Business:** 4xx — do not retry; return 400/404/409; set `isRetryable: false` in AppError when using Result for SQS
+- **Infrastructure:** DB/connection failure — retry
+- **Unknown:** Log, consider as retryable unless proven otherwise
+
+## Result Pattern (minimal implementation)
+
+- **AppError:** `code`, `message`, `statusCode?`, `isRetryable?`, `details?`
+- **Result<T, E>:** `{ success: true; data: T } | { success: false; error: E }`; helpers: `Result.ok(data)`, `Result.fail(error)`, `Result.isOk(r)`, `Result.isFail(r)`
+- Use for domain/validation; throw for programming errors; in SQS handler push failed messageId to batchItemFailures and do not throw for business/validation (treat as non-retryable)
+
+## API Gateway Response
+
+- Success: statusCode 2xx, body JSON string
+- Error: Use RFC 7807 ProblemDetails (type, title, status, detail, instance, etc.); set statusCode from error; CORS headers on error response
+- Middy: Use `httpErrorHandler` (or equivalent) to map thrown errors to response; ensure 4xx/5xx and body format consistent
+
+## SQS / Batch
+
+- Do not throw to fail entire batch; catch per message, push `itemIdentifier: record.messageId` to batchItemFailures, return `{ batchItemFailures }`
+- For non-retryable (e.g. validation): still add to batchItemFailures so Lambda does not retry; optionally send to DLQ via visibility timeout + redrive policy
+
+## Conventions
+
+- Classify errors; use Result for expected failures; map to correct HTTP status and body; log with correlationId; include isRetryable for batch
+
+## Anti-Patterns
+
+- Throwing in SQS handler to fail batch; returning 200 on error; no correlationId in logs; generic 500 for validation errors
+
+**See also:** `sqs-processing.mdc`, `lambda-handlers.mdc`, `../../patterns/error-handling.mdc`

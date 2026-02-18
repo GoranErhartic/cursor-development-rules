@@ -1,6 +1,5 @@
 ---
 description: "Input validation and sanitization rules - SQL injection, XSS, path traversal prevention"
-globs: ["**/*Controller*.cs", "**/*Handler*.cs", "**/*Validator*.cs"]
 ---
 
 # Input Sanitization
@@ -101,4 +100,4 @@ public static bool IsValidUrl(string url, params string[] allowedSchemes)
 - ❌ Single sanitization for all contexts
 - ❌ Trusting data from your own database (stored XSS)
 
-**See also:** `security.mdc`, `request-validation.mdc`
+**See also:** `security.mdc`, `validation.mdc`

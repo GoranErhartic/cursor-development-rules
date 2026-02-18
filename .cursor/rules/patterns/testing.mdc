@@ -1,5 +1,5 @@
 ---
-description: "Testing strategy - TDD workflow, test structure, naming conventions"
+description: "Testing strategy concepts - TDD Red/Green/Refactor workflow, AAA (Arrange/Act/Assert) structure, test naming conventions, unit vs integration vs E2E categories, mocking guidelines, coverage strategy"
 ---
 
 # Testing Strategy
@@ -30,20 +30,17 @@ description: "Testing strategy - TDD workflow, test structure, naming convention
 
 ## Test Naming Convention
 
-```
-{MethodName}_When{Condition}_Should{ExpectedBehavior}
-```
+Use a language-appropriate convention consistently within a codebase:
 
-or
+- **C# and Java:** `{MethodName}_When{Condition}_Should{ExpectedBehavior}`
+- **Node.js and React:** `should {expected} when {condition}`
 
-```
-{methodName}_should{ExpectedBehavior}_when{Condition}
-```
+If a repository already has a stable naming convention, keep it consistent unless the user asks to migrate.
 
 ### Examples
 - `Handle_WhenUserIsValid_ShouldReturnSuccess`
 - `Handle_WhenEmailExists_ShouldReturnFailure`
-- `GetById_WhenUserDoesNotExist_ShouldReturnNotFound`
+- `should return 404 when user does not exist`
 
 ## Test Categories
 

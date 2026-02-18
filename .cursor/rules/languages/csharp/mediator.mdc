@@ -1,6 +1,5 @@
 ---
 description: "Custom mediator pattern for CQRS - commands, queries, handlers, pipeline behaviors"
-globs: ["**/*Command*.cs", "**/*Query*.cs", "**/*Handler*.cs", "**/Behaviors/**/*.cs"]
 ---
 
 # Custom Mediator Pattern
@@ -108,4 +107,4 @@ Order of behaviors:
 - Handlers are `sealed` classes
 - Use `record` for commands and queries
 
-**See also:** `request-input-sanitization.mdc`, `request-validation.mdc`, `error-handling.mdc`
+**See also:** `input-sanitization.mdc`, `validation.mdc`, `error-handling.mdc`

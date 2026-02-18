@@ -1,352 +1,40 @@
 ---
 description: "TypeScript and Node.js code quality - ESLint, Prettier, naming conventions, file organization"
-globs: ["**/*.ts", "**/*.mts", "**/tsconfig.json", "**/.eslintrc*", "**/eslint.config.*"]
 ---
 
-# Code Quality & TypeScript Best Practices
+# Code Quality (Node.js)
 
-## TypeScript Configuration
+## TypeScript
 
-### Strict Mode (Required)
+- **Strict:** strict, noUncheckedIndexedAccess, noImplicitReturns, noFallthroughCasesInSwitch
+- **Config:** module NodeNext; path aliases (@/*); exclude test and build output from root tsconfig
+- **Types:** Explicit function return types for public APIs; avoid any; use unknown and narrow
 
-```json
-// tsconfig.json
-{
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": true,
-    "exactOptionalPropertyTypes": true,
-    "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true,
-    "declaration": true,
-    "outDir": "./dist",
-    "rootDir": "./src"
-  },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
-}
-```
+## Naming
 
-## ESLint Configuration
+- **Files:** kebab-case or PascalCase for components; consistent per project
+- **Variables/functions:** camelCase; constants UPPER_SNAKE when true constants
+- **Interfaces/types:** PascalCase; I-prefix optional (e.g. User or IUser)
 
-### Flat Config (ESLint 9+)
+## Structure
 
-```typescript
-// eslint.config.ts
-import eslint from "@eslint/js";
-import tseslint from "typescript-eslint";
-import prettier from "eslint-config-prettier";
+- **Layers:** Controllers → services → repositories (or domain); shared (clients, errors, utils); test (setup, factories)
+- **Single responsibility:** One main export per file; small modules
+- **Imports:** Prefer path aliases; group (external, internal, types); no circular deps
 
-export default tseslint.config(
-  eslint.configs.recommended,
-  ...tseslint.configs.strictTypeChecked,
-  ...tseslint.configs.stylisticTypeChecked,
-  prettier,
-  {
-    languageOptions: {
-      parserOptions: {
-        projectService: true,
-        tsconfigRootDir: import.meta.dirname,
-      },
-    },
-    rules: {
-      "@typescript-eslint/no-unused-vars": [
-        "error",
-        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
-      ],
-      "@typescript-eslint/explicit-function-return-type": "error",
-      "@typescript-eslint/no-explicit-any": "error",
-      "@typescript-eslint/prefer-nullish-coalescing": "error",
-      "@typescript-eslint/prefer-optional-chain": "error",
-      "@typescript-eslint/strict-boolean-expressions": "error",
-    },
-  }
-);
-```
+## Tooling
 
-## Prettier Configuration
-
-```json
-// .prettierrc
-{
-  "semi": true,
-  "singleQuote": true,
-  "trailingComma": "es5",
-  "tabWidth": 2,
-  "printWidth": 100
-}
-```
-
-## Naming Conventions
-
-| Element | Convention | Example |
-|---------|------------|---------|
-| Variables | camelCase | `userData`, `isActive` |
-| Functions | camelCase | `getUserById`, `validateEmail` |
-| Classes | PascalCase | `UserService`, `OrderRepository` |
-| Interfaces | PascalCase | `UserDto`, `CreateOrderRequest` |
-| Types | PascalCase | `UserId`, `OrderStatus` |
-| Constants | UPPER_SNAKE_CASE | `MAX_RETRIES`, `DEFAULT_TIMEOUT` |
-| Enums | PascalCase | `OrderStatus.Pending` |
-| Files | kebab-case | `user-service.ts`, `order-repository.ts` |
-| Folders | kebab-case | `user-management/`, `order-processing/` |
-
-## Type Best Practices
-
-### Prefer Type Inference
-
-```typescript
-// GOOD - Let TypeScript infer when obvious
-const users = []; // Inferred as never[] - be explicit here
-const count = 0; // Inferred as number - OK
-
-// GOOD - Be explicit for function returns and complex types
-function getUser(id: string): User | undefined {
-  return users.find((u) => u.id === id);
-}
-
-// BAD - Redundant type annotation
-const name: string = "John"; // string is obvious
-```
-
-### Use Branded Types for IDs
-
-```typescript
-// GOOD - Prevents mixing different ID types
-declare const UserIdBrand: unique symbol;
-declare const OrderIdBrand: unique symbol;
-
-type UserId = string & { readonly [UserIdBrand]: typeof UserIdBrand };
-type OrderId = string & { readonly [OrderIdBrand]: typeof OrderIdBrand };
-
-function createUserId(id: string): UserId {
-  return id as UserId;
-}
-
-function getUser(id: UserId): User {
-  // TypeScript prevents passing OrderId here
-}
-
-// BAD - Plain strings can be mixed up
-function getUser(id: string): User {} // Could pass orderId by mistake
-```
-
-### Use Discriminated Unions
-
-```typescript
-// GOOD - Exhaustive pattern matching
-type Result<T> =
-  | { success: true; data: T }
-  | { success: false; error: Error };
-
-function handleResult<T>(result: Result<T>): T | null {
-  if (result.success) {
-    return result.data; // TypeScript knows data exists
-  }
-  console.error(result.error); // TypeScript knows error exists
-  return null;
-}
-```
-
-### Avoid `any`, Use `unknown`
-
-```typescript
-// GOOD - Type-safe unknown handling
-function parseJson(json: string): unknown {
-  return JSON.parse(json);
-}
-
-const data = parseJson('{"name": "John"}');
-if (isUser(data)) {
-  console.log(data.name); // Safe after type guard
-}
-
-// BAD - Loses all type safety
-function parseJson(json: string): any {
-  return JSON.parse(json);
-}
-```
-
-## Function Patterns
-
-### Use Readonly Parameters
-
-```typescript
-// GOOD - Prevents accidental mutation
-function processUsers(users: readonly User[]): void {
-  // users.push() would be a compile error
-  users.forEach((user) => console.log(user.name));
-}
-
-// GOOD - Deep readonly for objects
-type DeepReadonly<T> = {
-  readonly [P in keyof T]: T[P] extends object ? DeepReadonly<T[P]> : T[P];
-};
-
-function processOrder(order: DeepReadonly<Order>): void {
-  // Cannot mutate any nested property
-}
-```
-
-### Use Function Overloads Sparingly
-
-```typescript
-// GOOD - Single function with union types when possible
-function find<T>(items: T[], predicate: (item: T) => boolean): T | undefined;
-function find<T>(items: T[], id: string): T | undefined;
-function find<T>(
-  items: T[],
-  predicateOrId: ((item: T) => boolean) | string
-): T | undefined {
-  if (typeof predicateOrId === "string") {
-    return items.find((item) => (item as { id: string }).id === predicateOrId);
-  }
-  return items.find(predicateOrId);
-}
-```
-
-## Error Handling
-
-### Use Custom Error Classes
-
-```typescript
-// GOOD - Structured error handling
-class AppError extends Error {
-  constructor(
-    message: string,
-    public readonly code: string,
-    public readonly statusCode: number = 500,
-    public readonly isOperational: boolean = true
-  ) {
-    super(message);
-    this.name = this.constructor.name;
-    Error.captureStackTrace(this, this.constructor);
-  }
-}
-
-class NotFoundError extends AppError {
-  constructor(resource: string, id: string) {
-    super(`${resource} with id ${id} not found`, "NOT_FOUND", 404);
-  }
-}
-
-class ValidationError extends AppError {
-  constructor(
-    message: string,
-    public readonly errors: Record<string, string[]>
-  ) {
-    super(message, "VALIDATION_ERROR", 400);
-  }
-}
-```
-
-## File Organization
-
-```
-src/
-├── index.ts                 # Application entry point
-├── app.ts                   # Express/Fastify app setup
-├── config/                  # Configuration
-│   ├── index.ts
-│   └── database.ts
-├── modules/                 # Feature modules
-│   ├── users/
-│   │   ├── user.controller.ts
-│   │   ├── user.service.ts
-│   │   ├── user.repository.ts
-│   │   ├── user.dto.ts
-│   │   ├── user.schema.ts
-│   │   └── user.test.ts
-│   └── orders/
-│       └── ...
-├── shared/                  # Shared utilities
-│   ├── middleware/
-│   ├── errors/
-│   └── utils/
-└── types/                   # Global type definitions
-    └── index.d.ts
-```
-
-## Import Organization
-
-```typescript
-// 1. Node.js built-ins
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-
-// 2. External packages
-import express from "express";
-import { z } from "zod";
-
-// 3. Internal modules (absolute paths)
-import { UserService } from "@/modules/users/user.service";
-import { logger } from "@/shared/logger";
-
-// 4. Relative imports
-import { UserDto } from "./user.dto";
-import type { CreateUserRequest } from "./user.types";
-```
-
-## Async/Await Best Practices
-
-```typescript
-// GOOD - Always handle promise rejections
-async function fetchUser(id: string): Promise<User> {
-  try {
-    const response = await fetch(`/api/users/${id}`);
-    if (!response.ok) {
-      throw new NotFoundError("User", id);
-    }
-    return (await response.json()) as User;
-  } catch (error) {
-    if (error instanceof AppError) throw error;
-    throw new AppError("Failed to fetch user", "FETCH_ERROR");
-  }
-}
-
-// GOOD - Parallel execution when independent
-async function getUserWithOrders(userId: string): Promise<UserWithOrders> {
-  const [user, orders] = await Promise.all([
-    userService.findById(userId),
-    orderService.findByUserId(userId),
-  ]);
-  return { ...user, orders };
-}
-
-// BAD - Sequential when could be parallel
-async function getUserWithOrders(userId: string): Promise<UserWithOrders> {
-  const user = await userService.findById(userId);
-  const orders = await orderService.findByUserId(userId); // Waits unnecessarily
-  return { ...user, orders };
-}
-```
+- **ESLint:** TypeScript and recommended rules; fix on save
+- **Prettier:** Consistent formatting; run with ESLint without conflict (eslint-config-prettier)
+- **Pre-commit:** Lint and format; optional type-check
 
 ## Conventions
 
-- ALWAYS enable TypeScript strict mode
-- Use ESLint with typescript-eslint for static analysis
-- Use Prettier for consistent formatting
-- Prefer `unknown` over `any`
-- Use branded types for IDs to prevent mixing
-- Use discriminated unions for type-safe pattern matching
-- Keep files focused and under 300 lines
-- Use barrel exports (`index.ts`) for public module APIs
-- Prefix Node.js built-ins with `node:` (e.g., `node:fs`)
+- Strict TypeScript; consistent naming; layered structure; no dead code; fail fast on invalid config
+- See patterns/clean-code.mdc for general principles
 
 ## Anti-Patterns
 
-- ❌ Using `any` type
-- ❌ Disabling TypeScript strict checks
-- ❌ Ignoring ESLint errors with `eslint-disable`
-- ❌ Using `!` non-null assertion without validation
-- ❌ Mixing business logic with infrastructure code
-- ❌ Creating circular dependencies between modules
-- ❌ Using default exports (prefer named exports)
-- ❌ Leaving console.log statements in production code
+- any; unchecked indexed access; large files; circular dependencies; inconsistent naming
 
-**See also:** `error-handling.mdc`, `testing.mdc`
+**See also:** `../../patterns/clean-code.mdc`, `testing.mdc`

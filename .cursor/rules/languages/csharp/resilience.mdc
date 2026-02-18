@@ -1,6 +1,5 @@
 ---
 description: "Polly resilience patterns - retry, circuit breaker, timeout, bulkhead for HTTP clients"
-globs: ["**/*HttpClient*.cs", "**/Services/**/*.cs", "**/Clients/**/*.cs", "**/Program.cs"]
 ---
 
 # Polly Resilience Patterns

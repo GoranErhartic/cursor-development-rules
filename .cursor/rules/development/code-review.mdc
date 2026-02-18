@@ -1,0 +1,43 @@
+---
+description: "Code review loop, Definition of Done, summary format, verification checklist"
+---
+
+# Code Review and Definition of Done
+
+## Code Review
+
+1. When task is completed perform a code review
+2. Try to find room for improvement or code optimization
+3. If there is identified room for improvement document it as a new checklist
+4. Implement given improvements
+5. Loop back to first point of the code review and repeat the process until you are satisfied with the output
+
+## Definition of Done
+
+A task is complete when:
+
+| Criterion | Requirement |
+|-----------|-------------|
+| Builds | Project compiles without errors or warnings |
+| Tests Pass | All unit and integration tests are green |
+| No Secrets | No credentials or sensitive data in codebase |
+| Documented | Changes explained with clear reasoning |
+
+## Summary Format
+
+After completing work, provide:
+1. **What changed** — Modifications made
+2. **Why** — Reasoning behind decisions
+3. **How to verify** — Validation steps
+4. **Limitations** — Trade-offs or future considerations
+
+## Quick Checklist
+
+- [ ] Project builds successfully
+- [ ] All tests pass
+- [ ] No secrets exposed
+- [ ] Input sanitization at boundaries
+- [ ] Follows existing patterns
+- [ ] Error handling implemented
+
+**See also:** `development/code-implementation.mdc`

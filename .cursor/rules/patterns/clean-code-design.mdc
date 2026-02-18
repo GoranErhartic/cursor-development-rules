@@ -1,0 +1,94 @@
+---
+description: "Clean code design - minimize side effects, prefer immutability, Law of Demeter, composition over inheritance, explicit dependencies"
+---
+
+# Clean Code: Design Principles
+
+## Minimize Side Effects
+
+Functions that modify external state are harder to test and reason about. Isolate side effects to specific locations.
+
+```
+// BAD - Hidden side effect
+function calculateTotal(cart) {
+    cart.lastCalculated = new Date()  // Side effect!
+    return cart.items.reduce(...)
+}
+
+// GOOD - Pure calculation, explicit side effect
+function calculateTotal(items) {
+    return items.reduce(...)
+}
+
+function updateCartWithTotal(cart) {
+    cart.total = calculateTotal(cart.items)
+    cart.lastCalculated = new Date()
+}
+```
+
+## Prefer Immutability
+
+Immutable data is easier to reason about — you don't need to track where it might have changed.
+
+```
+// BAD - Mutates input
+function addItem(cart, item) {
+    cart.items.push(item)
+    return cart
+}
+
+// GOOD - Returns new object
+function addItem(cart, item) {
+    return {
+        ...cart,
+        items: [...cart.items, item]
+    }
+}
+```
+
+## Law of Demeter
+
+Don't chain through objects. Each unit should only talk to its immediate collaborators.
+
+```
+// BAD - Reaching through objects
+user.getAccount().getSettings().getPreferences().getTheme()
+
+// GOOD - Ask for what you need directly
+user.getTheme()
+// or
+userPreferencesService.getTheme(userId)
+```
+
+## Composition Over Inheritance
+
+Favor combining simple objects over building inheritance hierarchies.
+
+## Make Dependencies Explicit
+
+Inject dependencies rather than hiding them. This improves testability and makes relationships clear.
+
+```
+// BAD - Hidden dependency
+class OrderService {
+    processOrder(order) {
+        Database.save(order)  // Hidden static dependency
+        EmailService.send()   // Hidden static dependency
+    }
+}
+
+// GOOD - Explicit dependencies
+class OrderService {
+    constructor(database, emailService) {
+        this.database = database
+        this.emailService = emailService
+    }
+    
+    processOrder(order) {
+        this.database.save(order)
+        this.emailService.send()
+    }
+}
+```
+
+**See also:** `patterns/architecture.mdc`, `patterns/clean-code-functions.mdc`, `patterns/testing.mdc`

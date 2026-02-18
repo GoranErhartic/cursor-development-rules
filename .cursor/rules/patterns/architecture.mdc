@@ -1,5 +1,5 @@
 ---
-description: "Universal architecture principles - Clean Architecture, Vertical Slice, CQRS, DDD, SOLID"
+description: "Architecture principles - Clean Architecture layers (Domain→Application→Infrastructure→API), Vertical Slice, CQRS command/query separation, DDD aggregates/value objects, SOLID, dependency direction rules"
 ---
 
 # Architecture Principles

@@ -1,6 +1,5 @@
-﻿---
+---
 description: "CQRS pattern for Spring Boot BFF - commands, queries, handlers, dispatcher (no database transactions)"
-globs: ["**/*Command*.java", "**/*Query*.java", "**/*Handler*.java", "**/*Event*.java"]
 ---
 
 # CQRS Pattern for Spring Boot BFF

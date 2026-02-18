@@ -1,9 +1,10 @@
 ---
 description: "Error handling patterns - ProblemDetails, Result pattern, global exception middleware"
-globs: ["**/*Exception*.cs", "**/Middleware/**/*.cs", "**/*Error*.cs", "**/*Result*.cs"]
 ---
 
 # Error Handling
+
+Concepts (Result vs exceptions, RFC 7807, global strategy): see `../../patterns/error-handling.mdc`. Below: C# implementation.
 
 ## Result Pattern
 
@@ -135,8 +136,8 @@ private static ProblemDetails ToProblemDetails(Error error, int statusCode) => n
 
 - NEVER expose stack traces or internal details in production
 - Use `ProblemDetails` (RFC 7807) for all error responses
-- Log exceptions with correlation IDs (see `serilog.mdc`)
+- Log exceptions with correlation IDs (see `logging.mdc`)
 - Handle specific exceptions, not generic `Exception`
 - Domain errors are NOT exceptions — use Result pattern
 
-**See also:** `serilog.mdc`, `mediator.mdc`
+**See also:** `../../patterns/error-handling.mdc`, `logging.mdc`, `mediator.mdc`

@@ -1,0 +1,216 @@
+---
+description: "EventBridge patterns - custom event bus CDK, event rules with detail-type filtering, putEvents API, Lambda targets, scheduled rules, event envelope schema, cross-service event routing"
+---
+
+# EventBridge Patterns
+
+## Overview
+
+Amazon EventBridge provides event-driven routing with filtering and transformation. Use it for decoupled, cross-service events (e.g. PropertyCreated → search sync, ListingSold → notifications). Prefer EventBridge over SNS when you need content-based filtering and multiple targets per event type.
+
+## CDK: Custom Event Bus and Rules
+
+```typescript
+// cdk/lib/stacks/events-stack.ts
+
+import { Stack, StackProps } from "aws-cdk-lib";
+import { Construct } from "constructs";
+import { EventBus, Rule } from "aws-cdk-lib/aws-events";
+import { LambdaFunction } from "aws-cdk-lib/aws-events-targets";
+import { StandardLambda } from "../constructs/lambda-function";
+import { Table } from "aws-cdk-lib/aws-dynamodb";
+
+interface EventsStackProps extends StackProps {
+  dataTable: Table;
+  opensearchEndpoint: string;
+}
+
+export class EventsStack extends Stack {
+  public readonly domainBus: EventBus;
+
+  constructor(scope: Construct, id: string, props: EventsStackProps) {
+    super(scope, id, props);
+
+    this.domainBus = new EventBus(this, "RealEstateDomainBus", {
+      eventBusName: "real-estate-domain",
+    });
+
+    const searchIndexerFn = new StandardLambda(this, "SearchIndexer", {
+      entry: "src/functions/sync-search/handler.ts",
+      handler: "handler",
+      memorySize: 512,
+      timeoutSeconds: 30,
+      environment: {
+        EVENT_BUS_NAME: this.domainBus.eventBusName,
+        OPENSEARCH_ENDPOINT: props.opensearchEndpoint,
+        DYNAMODB_TABLE_NAME: props.dataTable.tableName,
+      },
+    });
+    props.dataTable.grantReadData(searchIndexerFn);
+
+    new Rule(this, "PropertyEventsToSearch", {
+      eventBus: this.domainBus,
+      ruleName: "property-events-to-search",
+      eventPattern: {
+        source: ["real-estate.property"],
+        detailType: ["PropertyCreated", "PropertyUpdated", "PropertyDeleted"],
+      },
+      targets: [new LambdaFunction(searchIndexerFn)],
+    });
+
+    const notifierFn = new StandardLambda(this, "ListingNotifier", {
+      entry: "src/functions/listing-notifier/handler.ts",
+      handler: "handler",
+      memorySize: 256,
+      timeoutSeconds: 10,
+      environment: { EVENT_BUS_NAME: this.domainBus.eventBusName },
+    });
+    new Rule(this, "ListingSoldToNotifier", {
+      eventBus: this.domainBus,
+      ruleName: "listing-sold-to-notifier",
+      eventPattern: {
+        source: ["real-estate.listing"],
+        detailType: ["ListingSold"],
+      },
+      targets: [new LambdaFunction(notifierFn)],
+    });
+  }
+}
+```
+
+## Event Type Conventions
+
+Use a consistent envelope for domain events. Match `source` and `detail-type` in rules.
+
+```typescript
+// src/domain/events/types.ts
+
+export interface EventBridgeEnvelope<T = unknown> {
+  version: string;
+  id: string;
+  "detail-type": string;
+  source: string;
+  account: string;
+  time: string;
+  region: string;
+  resources: string[];
+  detail: T;
+}
+
+// Real estate sources and detail-types
+export const EventSources = {
+  Property: "real-estate.property",
+  Listing: "real-estate.listing",
+  Lead: "real-estate.lead",
+} as const;
+
+export type PropertyDetailType =
+  | "PropertyCreated"
+  | "PropertyUpdated"
+  | "PropertyDeleted";
+
+export type ListingDetailType =
+  | "ListingPublished"
+  | "ListingPriceChanged"
+  | "ListingSold"
+  | "ListingWithdrawn"
+  | "ListingExpired";
+```
+
+## Publishing Events
+
+```typescript
+// src/shared/events/publisher.ts
+
+import { EventBridgeClient, PutEventsCommand } from "@aws-sdk/client-eventbridge";
+import { randomUUID } from "node:crypto";
+import { logger } from "@/shared/logger";
+
+const client = new EventBridgeClient({});
+const EVENT_BUS_NAME = process.env.EVENT_BUS_NAME!;
+
+export async function putDomainEvent<T>(
+  source: string,
+  detailType: string,
+  detail: T,
+  resources?: string[]
+): Promise<string> {
+  const eventId = randomUUID();
+  await client.send(
+    new PutEventsCommand({
+      Entries: [
+        {
+          EventBusName: EVENT_BUS_NAME,
+          Source: source,
+          DetailType: detailType,
+          Detail: JSON.stringify(detail),
+          Id: eventId,
+          Time: new Date(),
+          Resources: resources,
+        },
+      ],
+    })
+  );
+  logger.info({ eventId, source, detailType }, "Domain event published");
+  return eventId;
+}
+
+// Usage: after creating a property
+await putDomainEvent(
+  EventSources.Property,
+  "PropertyCreated",
+  {
+    propertyId: property.id,
+    address: property.address,
+    ownerId: property.ownerId,
+    createdAt: property.createdAt,
+  },
+  [`arn:aws:real-estate:property:${property.id}`]
+);
+```
+
+## Lambda Target: Consuming Events
+
+```typescript
+// src/functions/sync-search/handler.ts
+
+import type { EventBridgeHandler } from "aws-lambda";
+import type { EventBridgeEnvelope } from "@/domain/events/types";
+
+interface PropertyCreatedDetail {
+  propertyId: string;
+  address: { city: string; state: string; zipCode: string };
+  ownerId: string;
+  createdAt: string;
+}
+
+export const handler: EventBridgeHandler<
+  "PropertyCreated",
+  PropertyCreatedDetail,
+  void
+> = async (event) => {
+  const detail = event.detail;
+  await searchService.indexProperty(detail);
+};
+```
+
+## Cross-Account (Optional)
+
+To allow another account to publish to your bus, attach a resource-based policy to the event bus granting `events:PutEvents` to the producer account. For cross-account rules, ensure the target Lambda is in the same account as the rule or use cross-account targets.
+
+## Conventions
+
+- Use a custom event bus per bounded context (e.g. real-estate-domain)
+- Name rules by purpose: `{source}-to-{target}`
+- Use typed `detail` in handlers; validate with Zod if needed
+- Publish after successful write; use idempotency in consumers
+- Include correlation ID in `detail` for tracing
+
+## Anti-Patterns
+
+- Putting sensitive data in event `detail` without encryption
+- Using default event bus for domain events (no isolation)
+- Missing idempotency in consumers (at-least-once delivery)
+- Overly broad event patterns (filter at rule level)
+
+**See also:** `sns-events.mdc`, `domains/real-estate/aws-lambda/real-estate-domain.mdc`, `idempotency.mdc`, `cdk-infrastructure-queues.mdc`

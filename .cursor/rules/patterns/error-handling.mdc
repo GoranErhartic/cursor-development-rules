@@ -1,5 +1,5 @@
 ---
-description: "Error handling patterns - Result pattern, RFC 7807 (ProblemDetails), global error handling"
+description: "Error handling concepts - Result pattern (success/failure without exceptions), RFC 7807 ProblemDetails format, domain errors vs infrastructure exceptions, global error handler strategy, error logging with correlation IDs"
 ---
 
 # Error Handling Patterns

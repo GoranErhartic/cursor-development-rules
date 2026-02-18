@@ -1,6 +1,5 @@
 ---
 description: "Authentication and authorization patterns - JWT Bearer, policy-based auth, claims"
-globs: ["**/*Auth*.cs", "**/Authorization/**/*.cs", "**/Identity/**/*.cs", "**/*Policy*.cs"]
 ---
 
 # Authentication & Authorization
@@ -117,4 +116,4 @@ public sealed class DocumentAuthorizationHandler
 - Use short-lived access tokens (15-30 min) with refresh tokens
 - Validate tokens on every request (don't cache authorization decisions)
 
-**See also:** `security.mdc`, `request-input-sanitization.mdc`
+**See also:** `security.mdc`, `input-sanitization.mdc`

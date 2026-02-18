@@ -1,0 +1,33 @@
+---
+description: "S3 presigned URLs - post-upload validation, multipart upload for large files"
+---
+
+# S3 Presigned URLs - Post-Upload Validation
+
+## When
+
+- After client uploads to S3 (e.g. to a quarantine prefix), validate content and size before moving to final location or processing.
+- Trigger: S3 event notification invoking Lambda on object create in upload bucket/prefix.
+
+## Validation Steps
+
+- **HeadObject:** Get ContentLength, ContentType (and metadata if stored).
+- **Actual content:** Use `GetObject` and stream or read first chunk; run **file-type** (or similar) on buffer to detect real MIME; compare to allowlist.
+- **Size:** Enforce max size; reject if over.
+- **On pass:** Copy to final bucket/prefix or update metadata; optionally delete from quarantine.
+- **On fail:** Delete from quarantine (or move to rejected); log and optionally notify; do not expose invalid content.
+
+## Multipart (Large Files)
+
+- For large uploads use S3 multipart (CreateMultipartUpload, UploadPart, CompleteMultipartUpload); client-side or via presigned URLs per part.
+- Validate after CompleteMultipartUpload (same as single-part: head + optional content check); enforce total size limit across parts.
+
+## Conventions
+
+- Always validate MIME and size server-side; use correlationId in metadata for tracing; quarantine then promote or reject
+
+## Anti-Patterns
+
+- Trusting client Content-Type only; no size limit; no quarantine/reject path
+
+**See also:** `s3-presigned-urls-upload.mdc`, `security.mdc`

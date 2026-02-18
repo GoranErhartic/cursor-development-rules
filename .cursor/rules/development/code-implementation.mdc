@@ -1,5 +1,5 @@
 ---
-description: "Workflow for implementing code changes - checklists and patterns"
+description: "Implementation workflow - pre-work checklist, TDD cycle steps, Definition of Done verification, build/test/security checks, summary format requirements"
 ---
 
 # Code Implementation Workflow
@@ -20,7 +20,7 @@ Before writing code:
 - **Refactor** while tests remain green
 - Repeat for each behavior unit
 
-> **Exception:** Trivial changes (config, formatting, single-line fixes) may skip TDD with documented justification.
+> **Exception:** Trivial changes may skip TDD only under the criteria in `development/tdd-workflow.mdc`, with documented justification.
 
 ### 3. Verification (Definition of Done)
 Before marking the task as complete, ensure:
@@ -37,3 +37,5 @@ Every implementation task must conclude with a summary in the following format:
 2. **Why**
 3. **How to verify**
 4. **Limitations**
+
+**See also:** `development/tdd-planning.mdc`, `development/tdd-workflow.mdc`, `development/code-review.mdc`

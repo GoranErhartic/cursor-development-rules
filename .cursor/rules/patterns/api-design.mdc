@@ -1,5 +1,5 @@
 ---
-description: "RESTful API design - HTTP methods, status codes, resource naming, versioning"
+description: "RESTful API design - HTTP methods mapping (GET/POST/PUT/PATCH/DELETE), status codes guide (2xx/4xx/5xx), plural resource naming, pagination (offset and cursor-based), filtering, URL versioning (/api/v1/), idempotency keys, HATEOAS"
 ---
 
 # API Design Principles

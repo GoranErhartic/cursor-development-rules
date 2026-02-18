@@ -1,0 +1,36 @@
+---
+description: "TDD mandate - Red/Green/Refactor workflow, test-first default, escape clause for trivial changes"
+tags: ["tdd", "workflow", "testing"]
+complexity: "beginner"
+relatedRules: ["development/tdd-planning.mdc", "patterns/testing.mdc"]
+dependsOn: []
+deprecated: false
+replacedBy: ""
+lastReviewed: "2026-02-18"
+---
+
+# TDD Workflow
+
+**Test-First Development is the default approach.**
+
+1. **RED** - Write a failing test that defines expected behavior
+2. **GREEN** - Write minimal code to make the test pass
+3. **REFACTOR** - Clean up while keeping tests green
+
+## Escape Clause (Trivial Changes Only)
+
+TDD may be skipped only when all of these are true:
+
+- The change is non-behavioral (formatting, comments, renames, docs)
+- Or the change is configuration-only (no runtime logic change)
+- Or the change is a one-line mechanical fix with no branch/flow impact
+- Existing tests already cover the touched behavior
+
+When skipping TDD, document the exact reason in the summary.
+
+## Terminology
+
+- **Trivial change:** A change that does not alter runtime behavior
+- **Non-trivial change:** Any behavioral change, new branch, new condition, or side effect
+
+**See also:** `development/code-implementation.mdc`, `patterns/testing.mdc`, `development/tdd-planning.mdc`

@@ -1,0 +1,66 @@
+---
+description: "C# + .NET project guide - technology stack, rule routing, key conventions"
+globs: ["**/*.cs", "**/*.csproj", "**/Directory.Build.props"]
+---
+
+# C# + .NET Development Guide
+
+## Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Runtime | .NET 10 |
+| Framework | ASP.NET Core |
+| Validation | FluentValidation |
+| Data | Entity Framework Core |
+| Messaging | Rebus |
+| Resilience | Polly |
+| Testing | xUnit, FluentAssertions, Moq, Testcontainers |
+| Logging | Serilog |
+
+## Rule Routing
+
+Consult these rules based on what you are working on:
+
+## Quick Reference
+
+- Build/modify API endpoint: `languages/csharp/controllers.mdc`, `languages/csharp/validation.mdc`, `languages/csharp/error-handling.mdc`
+- Build command/query flow: `languages/csharp/mediator.mdc`, `languages/csharp/testing.mdc`
+- Data and transactions: `languages/csharp/ef-core.mdc`, `languages/csharp/resilience.mdc`
+- Secure/auth changes: `languages/csharp/security.mdc`, `languages/csharp/auth.mdc`, `languages/csharp/input-sanitization.mdc`
+
+### API & Controllers
+- Controller conventions, routing, ActionResult → `languages/csharp/controllers.mdc`
+- Request validation (FluentValidation) → `languages/csharp/validation.mdc`
+- Input sanitization (SQL injection, XSS, path traversal) → `languages/csharp/input-sanitization.mdc`
+
+### Data & Persistence
+- EF Core DbContext, repositories, migrations → `languages/csharp/ef-core.mdc`
+
+### CQRS & Messaging
+- Mediator pattern (commands, queries, pipeline behaviors) → `languages/csharp/mediator.mdc`
+- Rebus messaging (handlers, sagas, outbox) → `languages/csharp/messaging.mdc`
+
+### Cross-Cutting
+- Code quality, C# 14 idioms, records, nullable references → `languages/csharp/code-quality.mdc`
+- Error handling (ProblemDetails, Result pattern) → `languages/csharp/error-handling.mdc`
+- Logging (Serilog, enrichers, correlation IDs) → `languages/csharp/logging.mdc`
+- Security (secrets, HTTPS, headers, CORS) → `languages/csharp/security.mdc`
+- Auth (JWT Bearer, policy-based, claims) → `languages/csharp/auth.mdc`
+- Resilience (Polly retry, circuit breaker, timeout) → `languages/csharp/resilience.mdc`
+- Testing (xUnit, FluentAssertions, Moq) → `languages/csharp/testing.mdc`
+- Dependencies (NuGet, Central Package Management) → `languages/csharp/dependencies.mdc`
+
+### Architecture Patterns (request when needed)
+- Clean Architecture, CQRS, DDD → `patterns/architecture.mdc`
+- Clean code principles → `patterns/clean-code.mdc`
+- CQRS details → `patterns/cqrs.mdc`
+- API design conventions → `patterns/api-design.mdc`
+
+## Key Conventions
+
+- **Error handling:** Result pattern for domain errors; global exception middleware; RFC 7807 ProblemDetails
+- **Validation:** FluentValidation at API boundaries
+- **Testing:** TDD; xUnit; FluentAssertions; Moq for mocks
+- **Logging:** Serilog with structured properties and correlation IDs
+- **Dependencies:** Central Package Management; only compatible licenses

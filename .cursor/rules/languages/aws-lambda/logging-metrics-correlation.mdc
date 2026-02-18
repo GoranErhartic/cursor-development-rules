@@ -1,0 +1,33 @@
+---
+description: "Lambda CloudWatch Metrics and correlation ID propagation - SQS/SNS/DynamoDB/HTTP, Log Insights queries"
+---
+
+# Lambda Metrics & Correlation ID
+
+## Metrics (Powertools)
+
+- **Setup:** `new Metrics({ serviceName, namespace, defaultDimensions: { environment } })`; singleton
+- **Publish:** `metrics.addMetric(name, unit, value)`; `metrics.addDimension(key, value)` for filtering; flush automatically at handler end (or manual)
+- **Units:** Use MetricUnit.Count, Milliseconds, etc.; custom metrics for business events (e.g. ListingCreated, OrderProcessed)
+- **Dimensions:** Add dimensions (e.g. listingType, status) for filtering in CloudWatch; avoid high cardinality (e.g. user id) unless needed
+
+## Correlation ID
+
+- **Propagation:** Extract from API Gateway request header, SQS message envelope, or SNS message attributes; set on logger (e.g. `logger.appendKeys({ correlationId })`); pass to downstream (HTTP header, SNS/SQS attributes)
+- **Logs:** Include correlationId in every log line (Powertools Logger with appendKeys or injectLambdaContext)
+- **X-Ray:** Add correlationId as annotation on segment/subsegment for trace correlation
+
+## Log Insights
+
+- Query by correlationId: `fields @message, @timestamp | filter correlationId = "value" | sort @timestamp`
+- Combine with trace ID for full request flow across Lambdas
+
+## Conventions
+
+- One correlationId per request/message; propagate to all Lambdas and logs; record key business metrics with dimensions
+
+## Anti-Patterns
+
+- No correlationId propagation; high-cardinality dimensions; missing metrics for critical paths
+
+**See also:** `logging-setup.mdc`, `logging-tracing.mdc`, `sqs-processing.mdc`

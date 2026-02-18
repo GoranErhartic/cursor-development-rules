@@ -1,0 +1,44 @@
+---
+description: "OpenSearch patterns - bulk indexing, property search queries, geo queries, memory-efficient operations"
+---
+
+# OpenSearch Patterns
+
+## Overview
+
+OpenSearch provides full-text search and geo queries. Lambda integration requires memory-efficient bulk operations and connection reuse.
+
+## Client
+
+- Use `@opensearch-project/opensearch` with `AwsSigv4Signer` for auth; singleton client; `node: process.env.OPENSEARCH_ENDPOINT`; close client on cold start teardown if needed
+- Set `maxRetries`, `requestTimeout`; use `aoss` service for OpenSearch Serverless
+
+## Index and Mapping
+
+- Define mapping (keyword vs text, geo_point for location); use custom analyzers for address/text search
+- Create index with `client.indices.create({ index, body: mapping })`; check `exists` before create
+- Use environment-based index name
+
+## Bulk Indexing
+
+- **Bulk API:** Build body as array of `{ index: { _index, _id } }` and `{ ...doc }` pairs; chunk (e.g. 500–1000 docs) to avoid memory/timeout
+- **Memory:** Stream or batch from DynamoDB Streams; do not load full result set into memory
+- Handle partial failures: check `response.body.items` for per-item errors; retry failed items or log and continue
+
+## Search Queries
+
+- **Full-text:** `match`, `match_phrase`, `multi_match`; use `keyword` for exact filters
+- **Geo:** `geo_distance`, `geo_bounding_box` with `location` as `geo_point`; distance in km/mi
+- **Compound:** `bool` with `must`, `filter`, `should`, `must_not`; `filter` for non-scoring
+- **Pagination:** `from`/`size` or `search_after` for deep pagination
+
+## Conventions
+
+- Single client per Lambda; chunk bulk ops; use filters to reduce result size; avoid large `size` in one request
+- Include correlationId/traceId in logs for debugging
+
+## Anti-Patterns
+
+- Loading entire dataset into memory; unbounded bulk size; scanning without filters; ignoring bulk item errors
+
+**See also:** `dynamodb-streams.mdc`, `logging-setup.mdc`

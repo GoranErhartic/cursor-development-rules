@@ -1,6 +1,5 @@
 ---
 description: "Code formatting conventions - parameter alignment, line breaking, annotation formatting"
-globs: ["**/*.java"]
 ---
 
 # Code Formatting Conventions

@@ -1,0 +1,37 @@
+---
+description: "Lambda testing Vitest 4 - aws-sdk-client-mock, LocalStack 3.x, Lambda handler unit tests, SQS/SNS event factories, CDK assertion tests, Powertools batch testing"
+---
+
+# Lambda Testing Patterns
+
+## Unit Tests (Vitest 4)
+
+- **Handler:** Invoke handler with mock event (APIGatewayProxyEventV2, SQSEvent, etc.); assert return shape and status/body or batchItemFailures
+- **Event factories:** Build minimal valid events (e.g. `Records` with body, messageId); reuse in tests
+- **AWS SDK mocking:** Use `aws-sdk-client-mock` (or equivalent) to mock DynamoDB, SNS, SQS, etc.; set up in test or setupFiles; reset in afterEach
+- **Env:** Set `process.env` in setup (table names, region, LOG_LEVEL); no real AWS calls
+
+## Config
+
+- Vitest: `environment: "node"`; `setupFiles` for env and global mocks; path alias `@` to src; exclude cdk from unit test glob
+- TDD: Red/Green/Refactor; test behavior and contracts, not implementation
+
+## Integration (LocalStack)
+
+- Use Testcontainers with LocalStack 3.x (or similar) for integration tests; create resources (SQS, DynamoDB, SNS) in test; invoke handler or call clients against LocalStack
+- Optional: Full deploy with CDK and run against deployed stack (e2e)
+
+## CDK Tests
+
+- Use `aws-cdk-lib/assertions`; `Template.fromStack(stack)`; `template.resourceCountIs`, `template.hasResourceProperties` for Lambda, queues, etc.
+- Snapshot tests for template if desired; update snapshots deliberately
+
+## Conventions
+
+- Unit test handlers with mocked AWS; use factories for events; integration tests with LocalStack or real resources in test account; CDK tests for infrastructure
+
+## Anti-Patterns
+
+- Real AWS calls in unit tests; no cleanup of mocks; testing implementation details; flaky integration tests
+
+**See also:** `lambda-handlers.mdc`, `sqs-processing.mdc`, `cdk-testing.mdc`, `../../patterns/testing.mdc`

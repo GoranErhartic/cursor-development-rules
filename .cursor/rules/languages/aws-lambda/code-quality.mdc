@@ -1,0 +1,34 @@
+---
+description: "Lambda Node.js 22 code quality - bundle size, esbuild node22, ESLint 9 flat config, TypeScript 5.7, Lambda-specific tsconfig and dependencies"
+---
+
+# Lambda Code Quality
+
+## Structure
+
+- **functions/** — one folder per Lambda (handler.ts, schema.ts); **services/** — business logic; **repositories/** — data access; **shared/** — clients, errors, middleware, logger, types; **test/** — setup, factories
+- **cdk/** — bin, lib/stacks, lib/constructs
+
+## TypeScript
+
+- Target ES2022; `module: "NodeNext"`, `moduleResolution: "NodeNext"`; strict, noUncheckedIndexedAccess, paths for `@/*`
+- Lambda-specific tsconfig: include only src (or functions) for build; exclude cdk from function bundle
+
+## Bundling (esbuild)
+
+- Use Node 22 target; externalize AWS SDK v3 and optional dependencies to reduce bundle size; single entry per function
+- Minimize dependencies in function package; tree-shake; check bundle size in CI
+
+## ESLint
+
+- Use flat config (eslint.config.mjs); TypeScript and Lambda best practices; no unused vars; consistent imports
+
+## Conventions
+
+- Small bundles; strict TypeScript; single responsibility per function; shared code in shared/; no secrets in code
+
+## Anti-Patterns
+
+- Large transitive dependencies; bundling cdk; non-strict TS; duplicated logic across functions
+
+**See also:** `lambda-handlers.mdc`, `cdk-infrastructure-lambda.mdc`, `languages/nodejs/code-quality.mdc`

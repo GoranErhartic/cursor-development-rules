@@ -1,6 +1,5 @@
 ---
 description: "Security practices for ASP.NET Core - secrets management, HTTPS, headers, CORS"
-globs: ["**/Program.cs", "**/Startup.cs", "**/appsettings*.json", "**/*Cors*.cs", "**/*Security*.cs"]
 ---
 
 # Security Practices
@@ -91,4 +90,4 @@ app.UseRateLimiter();
 - Enable Dependabot or similar for automated scanning
 - Keep packages updated
 
-**See also:** `request-input-sanitization.mdc`, `auth.mdc`
+**See also:** `input-sanitization.mdc`, `auth.mdc`

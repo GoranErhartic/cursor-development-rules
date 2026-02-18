@@ -1,0 +1,36 @@
+---
+description: "Lambda security - IAM least privilege CDK policies, Powertools Parameters for Secrets Manager/SSM, VPC Lambda, WAF for API Gateway, CORS HTTP API configuration"
+---
+
+# Lambda Security Patterns
+
+## IAM Least Privilege
+
+- **CDK:** Grant only required actions on specific resources: `table.grantReadWriteData(role)`, `queue.grantConsumeMessages(role)`, `topic.grantPublish(role)`; avoid `*` on resources when possible
+- **Basics:** Lambda execution role needs `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents`; X-Ray: `xray:PutTraceSegments`, `xray:PutTelemetryRecords`
+- **Secrets:** Grant `secretsmanager:GetSecretValue` only for specific secret ARNs used by the function
+- **SSM:** Grant `ssm:GetParameter*` for parameter paths the function reads
+
+## Secrets
+
+- **Never** in code or env as plain text in CDK; use **Powertools Parameters** (`getSecret`, `getParameter`) with SSM/Secrets Manager; cache with short TTL
+- Store DB URLs, API keys in Secrets Manager; reference by ARN in CDK and pass to function as env (e.g. `SECRET_ARN`); function fetches value at runtime
+
+## Network
+
+- **VPC:** Only when Lambda must access private RDS/VPC resources; add to private subnets; consider NAT for outbound if needed; cold start impact
+- **API Gateway:** Use WAF for rate limiting, IP rules, bot protection; restrict CORS to known origins in HTTP API config
+
+## CORS
+
+- Configure CORS on HTTP API (allow-origin, allow-methods, allow-headers); do not use `*` in production for credentials
+
+## Conventions
+
+- Least privilege IAM; secrets via Parameters/Secrets Manager; validate input at boundaries; HTTPS only; CORS and WAF on API
+
+## Anti-Patterns
+
+- Broad IAM (`*` on resources); secrets in env or code; missing CORS or overly permissive; no input validation
+
+**See also:** `powertools-parameters.mdc`, `api-gateway-http-api.mdc`, `../../patterns/security.mdc`

@@ -1,0 +1,43 @@
+---
+description: "CDK DynamoDB, SNS, SQS event source, DynamoDB Streams, RDS Proxy, idempotency table"
+---
+
+# CDK Data & Messaging Resources
+
+## DynamoDB
+
+- **Table:** Partition key (PK), sort key (SK); billing PAY_PER_REQUEST; stream NEW_AND_OLD_IMAGES if using Streams; pointInTimeRecovery; removalPolicy RETAIN for prod
+- **GSI:** Add GSIs for access patterns (e.g. GSI1PK/GSI1SK); projection ALL or specific attributes
+- **Idempotency table:** Separate table or dedicated PK prefix; TTL attribute for expiry; grant Lambda read/write
+
+## SQS
+
+- **Queue:** Standard or FIFO; visibility timeout ≥ 6× Lambda timeout for batch; dead-letter queue after max receives; redrive allow policy on DLQ source
+- **Event source mapping:** Lambda event source for queue; batch size (e.g. 10); optional filter
+- **Retry ladder:** Primary → DLQ; consumer of DLQ can have different handler or alert
+
+## SNS
+
+- **Topic:** Standard or FIFO; FIFO requires content-based dedup or message group ID
+- **Subscription:** SqsSubscription to queue; filter policy for message attributes; raw message delivery if needed
+- **Fan-out:** Multiple queues subscribe to same topic; filter per subscriber if needed
+
+## DynamoDB Streams
+
+- **Stream:** Enable on table (NEW_AND_OLD_IMAGES or NEW_IMAGE); Lambda event source mapping to stream; batch size and bisect on error for partial failure
+- **IAM:** Lambda needs dynamodb:GetRecords, GetShardIterator, ListStreams, and stream ARN resource
+
+## RDS Proxy
+
+- **Proxy:** Create RDS Proxy in front of RDS cluster; Lambda in VPC uses proxy endpoint; secrets for DB credentials in Secrets Manager
+- **Grant:** Lambda role needs rds-db:connect and access to secret
+
+## Conventions
+
+- Least privilege IAM; pass resource ARNs/names to Lambda via env; use constructs for reuse
+
+## Anti-Patterns
+
+- No DLQ for queues; visibility timeout too short; no stream on table when using Streams; broad IAM
+
+**See also:** `dynamodb.mdc`, `sqs-processing.mdc`, `dynamodb-streams.mdc`, `rds-proxy.mdc`, `idempotency.mdc`

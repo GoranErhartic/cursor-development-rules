@@ -1,6 +1,5 @@
 ---
 description: "Spring Cloud Stream messaging patterns - functional bindings, Kafka, RabbitMQ"
-globs: ["**/*Consumer*.java", "**/*Producer*.java", "**/*Event*.java", "**/*Message*.java", "**/messaging/**/*.java"]
 ---
 
 # Spring Cloud Stream Messaging

@@ -1,0 +1,116 @@
+---
+description: "Powertools Parameters - getParameter (SSM), getSecret (Secrets Manager), getAppConfig, built-in caching with maxAge, transform JSON/binary, environment-aware parameter paths"
+---
+
+# Powertools Parameters
+
+## Overview
+
+`@aws-lambda-powertools/parameters` provides a single API for SSM Parameter Store, Secrets Manager, and AppConfig with built-in caching. Use it instead of manual SDK calls and cache Maps. Reduces latency and cost across invocations.
+
+## Dependencies
+
+```bash
+pnpm add @aws-lambda-powertools/parameters
+```
+
+## Secrets Manager
+
+```typescript
+// src/shared/secrets/index.ts
+
+import { getSecret } from "@aws-lambda-powertools/parameters/secrets";
+import { logger } from "@/shared/logger";
+
+const CACHE_TTL_SECONDS = 300; // 5 minutes
+
+export async function getDatabaseCredentials(): Promise<{
+  username: string;
+  password: string;
+  host: string;
+  port: number;
+  database: string;
+}> {
+  const secretId = process.env.DATABASE_SECRET_ARN!;
+  try {
+    const value = await getSecret(secretId, {
+      maxAge: CACHE_TTL_SECONDS,
+      transform: "json",
+    });
+    return value as {
+      username: string;
+      password: string;
+      host: string;
+      port: number;
+      database: string;
+    };
+  } catch (error) {
+    logger.error({ err: error, secretId }, "Failed to retrieve secret");
+    throw error;
+  }
+}
+```
+
+## SSM Parameter Store
+
+```typescript
+import { getParameter } from "@aws-lambda-powertools/parameters/ssm";
+
+const opensearchEndpoint = await getParameter("/real-estate/opensearch-endpoint", {
+  maxAge: 60,
+});
+
+const configJson = await getParameter("/real-estate/config", {
+  maxAge: 120,
+  transform: "json",
+});
+```
+
+## AppConfig (Feature Flags / Config)
+
+```typescript
+import { getAppConfig } from "@aws-lambda-powertools/parameters/appconfig";
+
+const config = await getAppConfig("my-app", "my-env", "my-config", {
+  maxAge: 60,
+});
+```
+
+## Caching Behavior
+
+- **maxAge**: Cache TTL in seconds. Same secret/parameter within the same Lambda instance returns cached value.
+- Cache is per-instance; cold starts fetch fresh.
+- Use shorter maxAge for frequently changing config; longer for secrets.
+
+## IAM and CDK
+
+Grant the Lambda role access to the secret or parameter:
+
+```typescript
+// CDK: grant read to the Lambda
+props.databaseSecret.grantRead(handler);
+// Or for SSM
+handler.addToRolePolicy(
+  new PolicyStatement({
+    actions: ["ssm:GetParameter"],
+    resources: ["arn:aws:ssm:*:*:parameter/real-estate/*"],
+  })
+);
+```
+
+## Conventions
+
+- Use Powertools Parameters for all SSM/Secrets Manager/AppConfig access
+- Set `maxAge` appropriate to how often the value changes
+- Use `transform: "json"` for JSON secrets/parameters
+- Do not log secret values; log only secret ID or parameter name on error
+- Prefer SSM for non-sensitive config; Secrets Manager for credentials
+
+## Anti-Patterns
+
+- Manual GetSecretValue / GetParameter with a custom Map cache (use Powertools)
+- Hardcoding or env vars for secrets
+- Very long maxAge for values that rotate (e.g. DB password)
+- Logging secret content
+
+**See also:** `security.mdc`, `lambda-handlers.mdc`, `cdk-infrastructure-data.mdc`

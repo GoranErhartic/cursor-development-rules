@@ -1,0 +1,72 @@
+---
+description: "Java + Spring Boot project guide - technology stack, rule routing, key conventions"
+globs: ["**/*.java", "**/pom.xml", "**/build.gradle*"]
+---
+
+# Java + Spring Boot Development Guide
+
+## Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Runtime | Java 21+ |
+| Framework | Spring Boot 3 |
+| Build | Maven or Gradle |
+| Validation | Jakarta Bean Validation |
+| Data | Spring Data JPA |
+| Security | Spring Security |
+| Messaging | Spring Cloud Stream (Kafka, RabbitMQ) |
+| Resilience | Resilience4j |
+| Testing | JUnit 5, AssertJ, Mockito, WireMock |
+| Logging | SLF4J, Logback, MDC |
+
+## Rule Routing
+
+Consult these rules based on what you are working on:
+
+## Quick Reference
+
+- Build/modify REST endpoint: `languages/java/controllers.mdc`, `languages/java/validation.mdc`, `languages/java/error-handling.mdc`
+- Build service/business flow: `languages/java/cqrs.mdc`, `languages/java/bff-architecture.mdc`, `languages/java/testing.mdc`
+- Data access updates: `languages/java/jpa.mdc`, `languages/java/aggregation.mdc`
+- External integration and resilience: `languages/java/http-clients.mdc`, `languages/java/resilience.mdc`, `languages/java/logging.mdc`
+
+### API & Controllers
+- REST controllers, ResponseEntity, OpenAPI → `languages/java/controllers.mdc`
+- Request validation (Bean Validation) → `languages/java/validation.mdc`
+- Input sanitization (SQL injection, XSS, path traversal) → `languages/java/input-sanitization.mdc`
+
+### BFF & Architecture
+- BFF patterns, Clean Architecture, Vertical Slice → `languages/java/bff-architecture.mdc`
+- CQRS commands, queries, handlers, dispatcher → `languages/java/cqrs.mdc`
+- Response aggregation, parallel calls, CompletableFuture → `languages/java/aggregation.mdc`
+
+### Data & Persistence
+- JPA repositories, entities, transactions → `languages/java/jpa.mdc`
+
+### Cross-Cutting
+- Code quality, Java 25 idioms, records, sealed classes → `languages/java/code-quality.mdc`
+- Formatting (parameter alignment, line breaking) → `languages/java/formatting.mdc`
+- Error handling, Result pattern, ProblemDetail (RFC 7807) → `languages/java/error-handling.mdc`
+- Logging (SLF4J, Logback, MDC, Micrometer) → `languages/java/logging.mdc`
+- Security (secrets, HTTPS, headers, CORS) → `languages/java/security.mdc`
+- Auth (JWT, method security, RBAC) → `languages/java/auth.mdc`
+- Resilience4j (retry, circuit breaker, rate limiter) → `languages/java/resilience.mdc`
+- RestClient, declarative HTTP interfaces → `languages/java/http-clients.mdc`
+- Messaging (Kafka, RabbitMQ, functional bindings) → `languages/java/messaging.mdc`
+- Testing (JUnit 5, Mockito, WireMock, ArchUnit) → `languages/java/testing.mdc`
+- Dependencies (Maven BOM, versioning, licensing) → `languages/java/dependencies.mdc`
+
+### Architecture Patterns (request when needed)
+- Clean Architecture, CQRS, DDD → `patterns/architecture.mdc`
+- Clean code principles → `patterns/clean-code.mdc`
+- CQRS details → `patterns/cqrs.mdc`
+- API design conventions → `patterns/api-design.mdc`
+
+## Key Conventions
+
+- **Error handling:** Result pattern for domain errors; GlobalExceptionHandler for API errors; RFC 7807 ProblemDetails
+- **Validation:** Jakarta Bean Validation on request DTOs
+- **Testing:** TDD; JUnit 5; AssertJ for assertions; Mockito for mocks
+- **Logging:** SLF4J with MDC for correlation IDs
+- **Dependencies:** Prefer Spring BOM; only compatible licenses

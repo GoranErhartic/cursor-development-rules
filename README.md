@@ -71,8 +71,18 @@ Open your project in Cursor, and the AI will automatically:
 
 ```
 .cursor/rules/
-├── patterns/                  # Language-agnostic patterns & concepts
+├── rule-index.mdc             # Agent-requestable: Master index of all rules and stack routers
+├── agent-behavior.mdc         # Always-applied: Persona, Never Assume, Rule Flagging
+├── retrospective.mdc          # Agent-requestable: End-of-task review, rule improvement protocol
+├── README.md                  # Rules directory documentation
+│
+├── patterns/                  # Language-agnostic concepts (agent-requestable)
 │   ├── architecture.mdc       # Clean Architecture, CQRS, DDD, SOLID
+│   ├── clean-code.mdc         # Index to clean-code sub-rules
+│   ├── clean-code-naming.mdc  # Naming, vocabulary, abbreviations
+│   ├── clean-code-functions.mdc # Method params, guard clauses, cognitive load
+│   ├── clean-code-design.mdc  # Side effects, immutability, Law of Demeter
+│   ├── clean-code-hygiene.mdc # Dead code, magic numbers, comments, fail fast
 │   ├── error-handling.mdc     # Result pattern, RFC 7807
 │   ├── testing.mdc            # TDD workflow, AAA pattern
 │   ├── security.mdc           # Security principles
@@ -80,15 +90,19 @@ Open your project in Cursor, and the AI will automatically:
 │   ├── input-sanitization.mdc # Validation concepts
 │   └── cqrs.mdc               # Command/Query separation
 │
-├── development/               # Development workflow
+├── development/               # Development workflow (agent-requestable)
+│   ├── tdd-workflow.mdc       # TDD Red/Green/Refactor mandate
 │   ├── tdd-planning.mdc       # Test planning requirements
-│   └── code-implementation.mdc # Implementation workflow
+│   ├── code-implementation.mdc # Implementation workflow
+│   ├── code-review.mdc        # Code review loop, DoD, checklist
+│   └── context7-docs.mdc       # Context7 MCP documentation lookup
 │
 └── languages/                 # Language-specific implementations
-    ├── csharp/                # .NET / C# (14 files)
-    ├── java/                  # Java / Spring Boot (17 files)
-    ├── nodejs/                # Node.js / TypeScript (14 files)
-    ├── react/                 # React / TypeScript (15 files)
+    ├── aws-lambda/            # AWS Lambda / CDK / TypeScript (33 files)
+    ├── csharp/                # .NET / C# (15 files)
+    ├── java/                  # Java / Spring Boot (18 files)
+    ├── nodejs/                # Node.js / TypeScript (15 files)
+    ├── react/                 # React / TypeScript (17 files)
     └── _template/             # Template for adding new languages
         └── README.md          # Instructions for new languages
 ```
@@ -131,7 +145,7 @@ Comprehensive security guidance:
 
 Enforces modern language features and best practices:
 - C# 14 / .NET 10 idioms
-- Java 21 features (records, sealed classes, pattern matching)
+- Java 25 LTS features (records, sealed classes, pattern matching, virtual threads)
 - TypeScript 5.6+ strict mode, ESLint, Prettier
 - Nullable reference types
 - Async/await patterns
@@ -141,7 +155,7 @@ Enforces modern language features and best practices:
 
 ### C# / .NET
 
-**14 comprehensive rule files** covering:
+**15 comprehensive rule files** covering:
 
 | Category | Files |
 |----------|-------|
@@ -163,7 +177,7 @@ Enforces modern language features and best practices:
 
 ### Java / Spring Boot
 
-**17 comprehensive rule files** covering:
+**18 comprehensive rule files** covering:
 
 | Category | Files |
 |----------|-------|
@@ -175,7 +189,7 @@ Enforces modern language features and best practices:
 | **Security** | `security`, `auth` |
 
 **Technologies:**
-- Java 21, Spring Boot 3
+- Java 25 LTS, Spring Boot 3
 - Spring Data JPA
 - Jakarta Bean Validation
 - SLF4J, Logback, Micrometer
@@ -185,7 +199,7 @@ Enforces modern language features and best practices:
 
 ### Node.js / TypeScript
 
-**14 comprehensive rule files** covering:
+**15 comprehensive rule files** covering:
 
 | Category | Files |
 |----------|-------|
@@ -208,47 +222,70 @@ Enforces modern language features and best practices:
 
 ### React / TypeScript
 
-**15 comprehensive rule files** covering:
+**17 comprehensive rule files** covering:
 
 | Category | Files |
 |----------|-------|
 | **Core** | `code-quality`, `components`, `dependencies` |
 | **State** | `state-management`, `data-fetching` |
 | **UI** | `styling`, `forms`, `accessibility`, `routing` |
-| **Quality** | `testing`, `error-handling`, `performance` |
+| **Quality** | `testing`, `error-handling`, `error-boundaries`, `performance` |
 | **Security** | `security`, `validation`, `input-sanitization` |
 
 **Technologies:**
-- React 18+, TypeScript
+- React 18+, TypeScript (React 19 idioms in code-quality)
 - React Query / TanStack Query
-- React Router
+- React Router v7
 - React Hook Form, Zod
 - Testing Library, Vitest
+- Error Boundaries (granular fallback UI)
+
+### AWS Lambda / CDK / TypeScript
+
+**33 comprehensive rule files** covering:
+
+| Category | Files |
+|----------|-------|
+| **Router** | `nodejs-lambda.mdc` (glob-activated when Lambda/CDK paths are open) |
+| **Lambda** | `lambda-handlers`, `api-gateway-http-api`, `sqs-processing`, `sns-events`, `eventbridge`, `powertools-batch` |
+| **Data** | `dynamodb`, `dynamodb-streams`, `rds-proxy`, `opensearch`, S3 presigned URLs (upload/download/validation/CDK) |
+| **Infrastructure** | CDK (`cdk-infrastructure-queues`, `cdk-infrastructure-lambda`, `cdk-infrastructure-data`, `cdk-infrastructure-monitoring`), `cdk-testing`, `multi-environment`, `monitoring` |
+| **Observability** | `logging-setup`, `logging-tracing`, `logging-tracing-capture`, `logging-metrics-correlation` |
+| **Cross-cutting** | `error-handling`, `security`, `testing`, `idempotency`, `powertools-parameters`, `code-quality` |
+| **Domain (optional)** | `domains/real-estate/aws-lambda/real-estate-domain.mdc`, `domains/real-estate/aws-lambda/real-estate-events.mdc`, `domains/real-estate/aws-lambda/real-estate-rules.mdc` |
+
+**Technologies:**
+- Node.js 22, TypeScript 5.7, AWS CDK
+- Lambda, DynamoDB, SQS, SNS, EventBridge, API Gateway HTTP API, S3, OpenSearch, RDS Proxy
+- Middy v7, Powertools (Logger, Metrics, Tracer, Parameters, Batch)
+- Vitest 4, aws-sdk-client-mock, LocalStack 3.x
 
 ## 🔧 How It Works
 
-### Always Applied Rules
+Rules use a **router + on-demand** activation model to keep context small and relevant.
 
-Core behavioral rules are always active:
-- Agent persona and behavior
-- TDD workflow requirements
-- Rule flagging and retrospectives
+### Always Applied (two files)
 
-### Pattern Rules
+- **`agent-behavior.mdc`** — Persona (Senior Principal Backend Engineer), Never Assume, Rule Flagging, and links to stack routers and workflow rules.
+- **`project-context.mdc`** — Project-specific routing metadata (active stacks, directory→router mapping, key dependencies). Generated by project onboarding and loaded on every request.
 
-Language-agnostic concepts in `patterns/` define:
-- **What** patterns to use
-- **When** to apply them
-- Universal best practices
+### Glob-Activated Stack Routers (one per stack)
 
-### Language-Specific Rules
+When you open a file in a given stack, **only that stack’s router** is auto-loaded (e.g. opening a `.tsx` file loads `react-frontend.mdc` only). The router is a short table-of-contents that lists which rule files to load for the current task. The agent then requests the 2–3 rules relevant to the sub-task.
 
-Files in `languages/*/` activate based on file extensions:
-- `**/*.cs` → C# rules
-- `**/*.java` → Java rules
-- `**/*.ts`, `**/*.mts` → Node.js/TypeScript rules
-- `**/*.tsx` → React rules
-- Implementation details for each pattern
+| Stack | Router | Triggers when opening |
+|-------|--------|------------------------|
+| AWS Lambda / CDK | `languages/aws-lambda/nodejs-lambda.mdc` | `functions/`, `lambda/`, `handlers/`, `*.handler.ts`, `cdk/` |
+| Node.js / TypeScript (base) | `languages/nodejs/nodejs-base.mdc` | `.ts`, `tsconfig.json`, `package.json` (excluding Lambda/React/CDK) |
+| Java / Spring Boot | `languages/java/java-spring.mdc` | `.java`, `pom.xml`, `build.gradle*` |
+| C# / .NET | `languages/csharp/csharp-dotnet.mdc` | `.cs`, `*.csproj`, `Directory.Build.props` |
+| React / TypeScript | `languages/react/react-frontend.mdc` | `.tsx`, `vite.config.*`, `next.config.*` |
+
+### Agent-Requestable Rules (on demand)
+
+All other rules are **agent-requestable**: the agent sees their `description` and requests the file when needed. This includes all language-specific rules (handlers, SQS, DynamoDB, forms, etc.), all **pattern** rules (`patterns/*`), and **development** rules (TDD workflow, code review, context7 docs, retrospective). The agent uses the router’s rule-routing table and `rule-index.mdc` to discover which rules to load for the current sub-task.
+
+**Token budget:** Only the router (~1k tokens) plus 2–4 on-demand rules load per sub-task, keeping rules context under ~15–20k tokens so most of the context window stays available for code and conversation.
 
 ## 🎨 Adding a New Language
 
@@ -341,6 +378,16 @@ Please feel free to:
 3. Make your changes
 4. Submit a pull request
 
+### Validation
+
+Before opening a PR, run:
+
+```bash
+./scripts/validate_rules.sh
+```
+
+CI also runs `.github/workflows/rules-validation.yml` on push/PR.
+
 ### When Adding Rules
 
 - **Universal concepts** → `patterns/`
@@ -377,6 +424,10 @@ Your support helps maintain and expand this rule system with:
 ## 📜 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 📦 Rule Lifecycle
+
+Release/versioning, deprecation lifecycle, and maintenance cadence are defined in [RULES_RELEASE.md](RULES_RELEASE.md). Ongoing change notes belong in [CHANGELOG.md](CHANGELOG.md).
 
 ## 🙏 Acknowledgments
 

@@ -1,0 +1,108 @@
+---
+description: "Clean code hygiene - delete dead code, no magic numbers, comment discipline, fail fast, Rule of Three, premature optimization"
+---
+
+# Clean Code: Code Hygiene and Pragmatic Rules
+
+## Delete Dead Code
+
+Never comment out code "for later." Version control preserves history. Dead code creates confusion about what's active.
+
+```
+// BAD - Commented code clutters and confuses
+function calculateTotal(items) {
+    // const subtotal = items.reduce((a, b) => a + b.price, 0)
+    // const tax = subtotal * 0.08
+    // return subtotal + tax
+    return items.reduce((sum, item) => sum + item.price * 1.08, 0)
+}
+
+// GOOD - Clean, only active code
+function calculateTotal(items) {
+    return items.reduce((sum, item) => sum + item.price * 1.08, 0)
+}
+```
+
+## No Magic Numbers or Strings
+
+Extract literals into named constants that explain their purpose.
+
+```
+// BAD - What do these numbers mean?
+if (retryCount > 3) { }
+await sleep(86400000)
+if (status === 'A') { }
+
+// GOOD - Self-documenting constants
+const MAX_RETRY_ATTEMPTS = 3
+const ONE_DAY_MS = 24 * 60 * 60 * 1000
+const STATUS_ACTIVE = 'A'
+
+if (retryCount > MAX_RETRY_ATTEMPTS) { }
+await sleep(ONE_DAY_MS)
+if (status === STATUS_ACTIVE) { }
+```
+
+## Comment Discipline
+
+Default stance: **minimize comments.** Well-named functions, variables, and clear structure should make code self-documenting.
+
+**Do NOT:**
+- Add inline comments that narrate what the next line does ("Get the user", "Check if valid")
+- Add JSDoc/JavaDoc that merely restate the method signature
+- Add class or module header comments that repeat the class name
+
+**When comments ARE valuable:**
+- Business rules, regulatory or compliance reasons
+- Non-obvious workarounds or "why not the obvious approach"
+- Links to external references (tickets, RFCs, specs)
+
+```
+// GOOD - Comment explains why (business context)
+// Users inactive for 90+ days lose premium status per policy update 2024-03
+if (daysSinceLastLogin > 90) {
+    revokePremiumStatus(user)
+}
+```
+
+## Fail Fast
+
+Validate inputs at system boundaries. Throw errors early rather than propagating bad state.
+
+```
+// BAD - Error surfaces far from cause
+function processOrder(order) {
+    // ... 50 lines of processing ...
+    sendEmail(order.customer.email)  // NullPointerException here!
+}
+
+// GOOD - Validate upfront
+function processOrder(order) {
+    if (order == null) throw new Error("Order is required")
+    if (order.customer?.email == null) throw new Error("Customer email is required")
+    
+    // Safe to proceed
+}
+```
+
+## Pragmatic Rules
+
+### Rule of Three
+
+Don't abstract prematurely. Wait until you see a pattern three times before extracting.
+
+1. First occurrence: Just write it
+2. Second occurrence: Note the duplication, but tolerate it
+3. Third occurrence: Now refactor — you understand the pattern
+
+### Avoid Premature Optimization
+
+Write clear code first. Optimize only when you have evidence of a performance problem.
+
+> "Premature optimization is the root of all evil." — Donald Knuth
+
+### Let Tools Handle Formatting
+
+Configure automated formatters and linters once, then forget about it. Use your language's standard formatter; run formatting on save or pre-commit.
+
+**See also:** `patterns/clean-code-naming.mdc`, `patterns/clean-code-functions.mdc`, `patterns/clean-code-design.mdc`, `patterns/architecture.mdc`, `patterns/testing.mdc`

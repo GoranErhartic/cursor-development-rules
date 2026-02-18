@@ -1,0 +1,98 @@
+---
+description: "Node.js + AWS Lambda project guide - technology stack, rule routing, key conventions"
+globs: ["**/functions/**/*.ts", "**/lambda/**/*.ts", "**/handlers/**/*.ts", "**/*.handler.ts", "**/cdk/**/*.ts", "**/cdk/**/*.js"]
+tags: ["aws-lambda", "router", "typescript"]
+complexity: "beginner"
+relatedRules: ["rule-index.mdc", "project-context.mdc"]
+dependsOn: []
+deprecated: false
+replacedBy: ""
+lastReviewed: "2026-02-18"
+---
+
+# Node.js + AWS Lambda Development Guide
+
+## Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Runtime | Node.js 22, TypeScript 5.7 |
+| Infrastructure | AWS CDK |
+| Services | Lambda, DynamoDB, SQS, SNS, EventBridge, API Gateway HTTP API, S3, OpenSearch, RDS Proxy |
+| Middleware | Middy v7 |
+| Observability | Powertools Logger, Metrics, Tracer |
+| Validation | Zod |
+| Testing | Vitest 4, aws-sdk-client-mock, LocalStack 3.x |
+| Build | esbuild (Node 22 target) |
+| Package Manager | pnpm |
+
+## Rule Routing
+
+Consult these rules based on what you are working on:
+
+## Quick Reference
+
+- Build/modify Lambda handler: `languages/aws-lambda/lambda-handlers.mdc`, `languages/aws-lambda/error-handling.mdc`, `languages/nodejs/validation.mdc`
+- Build queue consumer: `languages/aws-lambda/sqs-processing.mdc`, `languages/aws-lambda/idempotency.mdc`, `languages/aws-lambda/powertools-batch.mdc`
+- Update CDK stack: `languages/aws-lambda/cdk-infrastructure-lambda.mdc`, `languages/aws-lambda/cdk-infrastructure-data.mdc`, `languages/aws-lambda/cdk-testing.mdc`
+- Improve observability: `languages/aws-lambda/logging-setup.mdc`, `languages/aws-lambda/logging-tracing.mdc`, `languages/aws-lambda/monitoring.mdc`
+
+### Lambda Functions
+- Handler patterns, Middy v7 middleware chain, cold start optimization, memory/timeout tuning → `languages/aws-lambda/lambda-handlers.mdc`
+- API Gateway HTTP API integration → `languages/aws-lambda/api-gateway-http-api.mdc`
+- SQS consumers, partial batch failures → `languages/aws-lambda/sqs-processing.mdc`
+- SNS publishing, fan-out → `languages/aws-lambda/sns-events.mdc`
+- EventBridge events → `languages/aws-lambda/eventbridge.mdc`
+- Powertools batch processing → `languages/aws-lambda/powertools-batch.mdc`
+
+### Data & Storage
+- DynamoDB single-table design, GSIs, batch ops, optimistic locking → `languages/aws-lambda/dynamodb.mdc`
+- DynamoDB Streams, event-driven sync (e.g. OpenSearch) → `languages/aws-lambda/dynamodb-streams.mdc`
+- RDS Proxy, Prisma, connection pooling → `languages/aws-lambda/rds-proxy.mdc`
+- OpenSearch queries, bulk indexing → `languages/aws-lambda/opensearch.mdc`
+- S3 presigned URLs → `languages/aws-lambda/s3-presigned-urls-upload.mdc`, `s3-presigned-urls-download.mdc`, `s3-presigned-urls-validation.mdc`, `s3-presigned-urls-cdk-client.mdc`
+
+### Infrastructure
+- CDK stacks, constructs, SQS retry ladder → `languages/aws-lambda/cdk-infrastructure-queues.mdc`, `cdk-infrastructure-lambda.mdc`, `cdk-infrastructure-data.mdc`, `cdk-infrastructure-monitoring.mdc`
+- CDK testing, assertions, snapshots → `languages/aws-lambda/cdk-testing.mdc`
+- Multi-environment (dev/staging/prod) → `languages/aws-lambda/multi-environment.mdc`
+- CloudWatch alarms, dashboards → `languages/aws-lambda/monitoring.mdc`
+
+### Cross-Cutting Concerns
+- Error handling (Result pattern + Lambda specifics) → `languages/aws-lambda/error-handling.mdc`
+- Code quality (Lambda Node.js 22, ESLint, TypeScript, bundle sizing) → `languages/aws-lambda/code-quality.mdc`
+- Validation (Zod schemas) → `languages/nodejs/validation.mdc`
+- Logging (Powertools Logger, X-Ray, Metrics) → `languages/aws-lambda/logging-setup.mdc`, `logging-tracing.mdc`, `logging-tracing-capture.mdc`, `logging-metrics-correlation.mdc`
+- Security (IAM, WAF, CORS, secrets) → `languages/aws-lambda/security.mdc`
+- Testing (Vitest, SDK mocking, LocalStack) → `languages/aws-lambda/testing.mdc`
+- Idempotency → `languages/aws-lambda/idempotency.mdc`
+- Parameters & Secrets (SSM, Secrets Manager) → `languages/aws-lambda/powertools-parameters.mdc`
+
+### Node.js Foundations (also applies to Lambda code)
+- TypeScript code quality → `languages/nodejs/code-quality.mdc`
+- HTTP clients (fetch, resilience) → `languages/nodejs/http-clients.mdc`
+- Resilience (retry, circuit breaker) → `languages/nodejs/resilience.mdc`
+- Auth patterns (JWT, API keys) → `languages/nodejs/auth.mdc`
+- Input sanitization → `languages/nodejs/input-sanitization.mdc`
+
+### Architecture Patterns (request when needed)
+- Clean Architecture, CQRS, DDD → `patterns/architecture.mdc`
+- Clean code principles → `patterns/clean-code.mdc`
+- CQRS details → `patterns/cqrs.mdc`
+- API design conventions → `patterns/api-design.mdc`
+
+### Optional Domain Packs (explicit opt-in)
+
+- Real estate domain pack (activate only when `project-context.mdc` includes `real-estate` in domains): `domains/real-estate/aws-lambda/real-estate-domain.mdc`, `domains/real-estate/aws-lambda/real-estate-events.mdc`, `domains/real-estate/aws-lambda/real-estate-rules.mdc`
+
+## Key Conventions
+
+- **Error handling:** Result pattern for domain errors; exceptions for infrastructure failures
+- **Response format:** RFC 7807 ProblemDetails for all API error responses
+- **Validation:** Zod schemas at Lambda handler entry points
+- **Logging:** Powertools Logger — structured JSON, always include correlationId
+- **Testing:** TDD mandatory; Vitest 4; `aws-sdk-client-mock` for AWS SDK
+- **Idempotency:** Required for all SQS consumers and state-changing operations
+- **Batch failures:** Always return `batchItemFailures` from SQS handlers
+- **Dependencies:** pnpm; only MIT/Apache-2.0/BSD/ISC licensed packages
+- **Secrets:** Never in code; use Powertools Parameters with SSM/Secrets Manager
