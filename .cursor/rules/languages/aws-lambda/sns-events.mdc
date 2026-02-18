@@ -33,4 +33,4 @@ description: "SNS Lambda publishing - fan-out to SQS, message attributes for fil
 
 - Raw payload without envelope; no correlationId; no idempotency for consumers; publishing without error handling
 
-**See also:** `sqs-processing.mdc`, `eventbridge.mdc`, `idempotency.mdc`, `domains/real-estate/aws-lambda/real-estate-events.mdc`
+**See also:** `sqs-processing.mdc`, `eventbridge.mdc`, `idempotency.mdc`

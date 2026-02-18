@@ -1,12 +1,7 @@
 ---
 description: "Quick-start playbook for rule discovery - first-run steps, task-to-rule shortcuts, and fallback when project context is missing."
 tags: ["onboarding", "discovery", "navigation"]
-complexity: "beginner"
 relatedRules: ["rule-index.mdc", "agent-behavior.mdc", "project-context.mdc"]
-dependsOn: []
-deprecated: false
-replacedBy: ""
-lastReviewed: "2026-02-18"
 ---
 
 # Quick Start
@@ -31,11 +26,5 @@ Request `development/project-onboarding.mdc`, generate `project-context.mdc`, th
 - Security hardening: `languages/*/security.mdc`, `languages/*/input-sanitization.mdc`, `languages/*/auth.mdc`
 - Refactor/cleanup: `patterns/clean-code.mdc`, stack `languages/*/code-quality.mdc`
 - Infra changes (Lambda): `languages/aws-lambda/cdk-infrastructure-*.mdc`, `languages/aws-lambda/monitoring.mdc`, `languages/aws-lambda/security.mdc`
-
-## Rule Loading Limits
-
-- Keep active rule set small: router + 2–4 rules
-- Prefer specific stack rules over broad conceptual reads
-- Add pattern rules only when the task crosses stack boundaries
 
 **See also:** `rule-index.mdc`, `README.md`, `development/project-onboarding.mdc`

@@ -1,12 +1,7 @@
 ---
 description: "Master index of all available rules - consult when planning multi-step tasks, working with unfamiliar parts of the codebase, or when no language-specific file is open. Lists per-stack router files and pattern rules."
 tags: ["discovery", "routing", "catalog"]
-complexity: "beginner"
 relatedRules: ["QUICK_START.mdc", "README.md"]
-dependsOn: []
-deprecated: false
-replacedBy: ""
-lastReviewed: "2026-02-18"
 ---
 
 # Rule Index

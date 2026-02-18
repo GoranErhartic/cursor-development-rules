@@ -41,10 +41,6 @@ This folder contains a unified, language-agnostic rule system for Cursor AI agen
     ├── react/                 # React / TypeScript (17 files, incl. error-boundaries.mdc)
     └── _template/             # Template for adding new languages
         └── README.md          # Instructions for new languages
-
-domains/                       # Optional project-specific packs
-└── real-estate/
-    └── aws-lambda/            # Domain-only rules, opt-in via project-context.mdc
 ```
 
 ## Rule Activation Model
@@ -73,9 +69,6 @@ Loaded into every agent interaction. Use sparingly — each token here costs on 
 
 ### 3. Agent-Requestable (no `alwaysApply`, no `globs`)
 All other rules are agent-requestable: the agent sees the `description` and requests the file when needed. This includes **all language-specific rules** (handlers, SQS, DynamoDB, forms, etc.), **pattern rules**, and **development workflow rules**. Descriptions must be keyword-rich for discoverability.
-
-### 4. Optional Domain Packs (explicit opt-in)
-Domain packs are never auto-loaded by globs. They must be explicitly enabled in `project-context.mdc` and loaded only when project scope requires them.
 
 ## Supported Languages
 
@@ -129,12 +122,7 @@ description: "Keyword-rich description for agent discoverability"
 globs: ["**/specific/paths/**/*.ext"]   # Optional: when to auto-activate
 alwaysApply: true                        # Optional: always active (use sparingly)
 tags: ["testing", "security"]            # Optional taxonomy tags
-complexity: "beginner|intermediate|advanced"
 relatedRules: ["other-rule.mdc"]         # Optional cross-links
-dependsOn: ["prerequisite-rule.mdc"]     # Optional prerequisites
-deprecated: false                        # Optional lifecycle flag
-replacedBy: ""                           # Optional successor rule
-lastReviewed: "YYYY-MM-DD"               # Optional review timestamp
 ---
 
 # Title
