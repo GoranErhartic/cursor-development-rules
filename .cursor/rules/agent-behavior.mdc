@@ -60,16 +60,56 @@ If two rules at the same precedence level conflict, use the more specific rule a
 - Prefer safety/security constraints over style preferences
 - If conflict changes behavior materially, ask the user before implementation
 
-## Project Bootstrap
+## CRITICAL: Process Over Speed
 
-Before acting on any task, ensure project context is available. If `project-context.mdc` is not visible in your context, read it. If it does not exist or contains only placeholders, suggest running project onboarding (request `development/project-onboarding.mdc`) to generate it before proceeding.
+> **Follow the process. Do not skip steps to produce output faster. Thoroughness beats eagerness.**
 
-## Stack Routers (load rules on demand)
+- A detailed user spec does NOT replace rule loading — the spec defines WHAT to build, rules define HOW to build
+- NEVER let the urge to start coding override the pre-implementation checklist below
+- When you feel pressure to "just start coding," that is the exact moment to STOP and follow the process
 
-Before implementation, read the **relevant stack router** to discover which rules to load for the current sub-task. Use `project-context.mdc` (when present) to know which routers apply to this project. Only the router is auto-loaded when files in that stack are open; all other stack rules are loaded on demand to keep context small.
+## CRITICAL: Pre-Implementation Gate
+
+> **STOP. Do NOT write ANY code until you have completed ALL of the following steps. No exceptions.**
+
+This gate applies to every implementation task: building features, implementing plans, creating modules, fixing bugs, refactoring.
+
+### Step 1 — Verify Project Context
+
+Read `project-context.mdc`. If it does not exist or contains only placeholders:
+- **STOP implementation.**
+- Tell the user: "Project context is not configured. I need to run onboarding first."
+- Read and follow `development/project-onboarding.mdc` to generate it.
+- Only proceed to Step 2 after `project-context.mdc` is populated.
+
+### Step 2 — Load Stack Router
+
+Using the directory→router mapping from `project-context.mdc`, read the **relevant stack router** for the files you are about to touch. If unsure which router applies, consult `rule-index.mdc`.
 
 - **Rule discovery:** `rule-index.mdc` — lists all routers and requestable rules
 - **Routers:** `languages/aws-lambda/nodejs-lambda.mdc`, `languages/nodejs/nodejs-base.mdc`, `languages/java/java-spring.mdc`, `languages/csharp/csharp-dotnet.mdc`, `languages/react/react-frontend.mdc`
+
+### Step 3 — Load Task-Relevant Rules
+
+From the router, read **2–3 rules** most relevant to the current sub-task. Common combinations:
+- Feature work: `testing.mdc`, `error-handling.mdc`, `code-quality.mdc`
+- API work: `controllers.mdc`, `validation.mdc`, `error-handling.mdc`
+- Data fetching: `http-clients.mdc`, `error-handling.mdc`, `testing.mdc`
+
+Also read: `development/code-implementation.mdc` (workflow + DoD) and `development/tdd-workflow.mdc` (TDD mandate).
+
+### Step 4 — Declare Loaded Rules
+
+Before writing the first line of code, explicitly list in your response:
+- The stack router you loaded
+- The 2–3 task rules you loaded
+- The development workflow rules you loaded
+
+This declaration is your proof-of-process. If you cannot list the rules, you have not completed the gate.
+
+### Then — Implement Following Loaded Rules
+
+Only after completing Steps 1–4 may you begin implementation, following the TDD workflow from `development/tdd-workflow.mdc` and the Definition of Done from `development/code-implementation.mdc`.
 
 ## See also
 
